@@ -1,0 +1,22 @@
+{
+  "name": "ai-service",
+  "version": "1.0.0",
+  "description": "OpenRouter-powered Godot project intelligence service.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node index.js",
+    "start": "node index.js",
+    "chroma": "chroma run --path ./data/chroma --host localhost --port 8000",
+    "test": "node --check index.js && find routes services utils config -maxdepth 2 -name '*.js' -print0 | xargs -0 -n1 node --check"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@babel/parser": "^7.29.2",
+    "chromadb": "^3.4.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}

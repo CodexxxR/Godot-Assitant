@@ -1,0 +1,12 @@
+{
+  "name": "godot-assistant",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first OpenRouter-powered Godot GDScript IDE assistant.",
+  "scripts": {
+    "setup": "npm --prefix services/ai-service install && npm --prefix apps/desktop-app install",
+    "dev": "bash scripts/dev.sh",
+    "build": "npm --prefix apps/desktop-app run build",
+    "test": "npm --prefix services/ai-service test && npm --prefix apps/desktop-app run typecheck"
+  }
+}
