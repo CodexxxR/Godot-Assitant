@@ -740,6 +740,28 @@ ipcMain.handle("project:create-file", async (_event, payload) => {
   };
 });
 
+ipcMain.handle("project:delete-file", async (_event, payload) => {
+  const rootPath = String(payload?.rootPath || "");
+  const filePath = String(payload?.filePath || "");
+  const extension = path.extname(filePath).toLowerCase();
+
+  if (!SUPPORTED_EXTENSIONS.has(extension)) {
+    throw new Error(`Unsupported Godot file type: ${extension || "none"}`);
+  }
+
+  const fullPath = resolveProjectFile(rootPath, filePath);
+  const stats = await pathStat(fullPath);
+  if (!stats?.isFile()) {
+    throw new Error("File does not exist");
+  }
+
+  await fs.rm(fullPath);
+
+  return {
+    filePath: normalizeRelativePath(path.resolve(rootPath), fullPath),
+  };
+});
+
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {

@@ -1,6 +1,10 @@
 const express = require("express");
 const { asyncHandler } = require("../utils/async-handler");
-const { indexFile, indexFiles } = require("../services/indexing.service");
+const {
+  deleteIndexedFile,
+  indexFile,
+  indexFiles,
+} = require("../services/indexing.service");
 
 const router = express.Router();
 
@@ -23,6 +27,18 @@ router.post(
     const result = await indexFiles({
       projectId: req.body.projectId,
       files: req.body.files,
+    });
+
+    res.json(result);
+  })
+);
+
+router.delete(
+  "/file",
+  asyncHandler(async (req, res) => {
+    const result = await deleteIndexedFile({
+      projectId: req.body.projectId,
+      fileName: req.body.fileName,
     });
 
     res.json(result);

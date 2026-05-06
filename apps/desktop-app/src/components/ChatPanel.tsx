@@ -1,7 +1,15 @@
 import Editor from "@monaco-editor/react";
-import { ContentCopyRounded, SendRounded, SyncRounded } from "@mui/icons-material";
+import {
+  ContentCopyRounded,
+  FullscreenExitRounded,
+  FullscreenRounded,
+  KeyboardDoubleArrowLeftRounded,
+  KeyboardDoubleArrowRightRounded,
+  SendRounded,
+  SyncRounded,
+} from "@mui/icons-material";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { FormEvent, WheelEvent } from "react";
+import type { FormEvent, KeyboardEvent, WheelEvent } from "react";
 import type { ChatMessage } from "../types/project";
 
 type ChatPanelProps = {
@@ -9,9 +17,13 @@ type ChatPanelProps = {
   input: string;
   isLoading: boolean;
   disabled: boolean;
+  isCollapsed?: boolean;
+  isFullscreen?: boolean;
   selectedCodeInfo?: string;
   onInputChange: (value: string) => void;
   onSend: () => void;
+  onToggleCollapse?: () => void;
+  onToggleFullscreen?: () => void;
 };
 
 type MessageSegment =
@@ -65,14 +77,18 @@ const getMonacoLanguage = (language: string) => {
   if (["gd", "gdscript"].includes(normalized)) return "gdscript";
   if (["gdshader", "shader", "glsl"].includes(normalized)) return "glsl";
   if (["tscn", "tres", "godot", "ini"].includes(normalized)) return "ini";
-  if (["js", "jsx", "javascript"].includes(normalized)) return "javascript";
+  if (["js", "jsx", "mjs", "cjs", "javascript"].includes(normalized)) return "javascript";
   if (["sh", "shell", "bash", "zsh"].includes(normalized)) return "shell";
   if (["yml", "yaml"].includes(normalized)) return "yaml";
+  if (["md", "markdown"].includes(normalized)) return "markdown";
+  if (["txt", "text", "plain", "plaintext", "code"].includes(normalized)) {
+    return "plaintext";
+  }
   if (["html", "css", "json", "markdown", "sql"].includes(normalized)) {
     return normalized;
   }
 
-  return "typescript";
+  return "plaintext";
 };
 
 function CodeSnippet({
@@ -174,9 +190,13 @@ export function ChatPanel({
   input,
   isLoading,
   disabled,
+  isCollapsed = false,
+  isFullscreen = false,
   selectedCodeInfo,
   onInputChange,
   onSend,
+  onToggleCollapse,
+  onToggleFullscreen,
 }: ChatPanelProps) {
   const messagesRef = useRef<HTMLDivElement>(null);
 
@@ -196,8 +216,31 @@ export function ChatPanel({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    onSend();
+    if (!disabled) onSend();
   };
+
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+
+    event.preventDefault();
+    if (!disabled) onSend();
+  };
+
+  if (isCollapsed) {
+    return (
+      <section className="panel panel-rail chat-panel" aria-label="Assistant collapsed">
+        <button
+          className="panel-rail-button"
+          onClick={onToggleCollapse}
+          title="Expand assistant"
+          type="button"
+        >
+          <KeyboardDoubleArrowLeftRounded />
+          <span>Assistant</span>
+        </button>
+      </section>
+    );
+  }
 
   return (
     <section className="panel chat-panel">
@@ -205,6 +248,26 @@ export function ChatPanel({
         <div>
           <h2>Assistant</h2>
           <span>{isLoading ? "Streaming" : selectedCodeInfo || "Ready"}</span>
+        </div>
+        <div className="panel-header-actions">
+          <button
+            className="icon-button compact-icon"
+            onClick={onToggleFullscreen}
+            title={isFullscreen ? "Exit assistant fullscreen" : "Fullscreen assistant"}
+            type="button"
+          >
+            {isFullscreen ? <FullscreenExitRounded /> : <FullscreenRounded />}
+          </button>
+          {!isFullscreen ? (
+            <button
+              className="icon-button compact-icon"
+              onClick={onToggleCollapse}
+              title="Collapse assistant"
+              type="button"
+            >
+              <KeyboardDoubleArrowRightRounded />
+            </button>
+          ) : null}
         </div>
       </div>
       <div className="messages" ref={messagesRef}>
@@ -223,8 +286,10 @@ export function ChatPanel({
         <textarea
           disabled={isLoading}
           onChange={(event) => onInputChange(event.target.value)}
+          onKeyDown={handleInputKeyDown}
           placeholder="Ask a codebase question"
           rows={4}
+          title="Enter sends. Shift+Enter adds a new line."
           value={input}
         />
         <button className="icon-button send-button" disabled={disabled} type="submit" title="Send">

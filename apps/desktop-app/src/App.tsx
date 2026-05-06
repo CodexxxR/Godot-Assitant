@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties, FormEvent } from "react";
 import {
+  CheckRounded,
   CodeRounded,
+  CloseRounded,
+  DeleteRounded,
   ErrorOutlineRounded,
   FolderOpenRounded,
   HomeRounded,
@@ -8,6 +12,7 @@ import {
   RefreshRounded,
   RestartAltRounded,
   SwapHorizRounded,
+  SyncRounded,
 } from "@mui/icons-material";
 import "./App.css";
 import { ChatPanel } from "./components/ChatPanel";
@@ -16,6 +21,7 @@ import { FileTree } from "./components/FileTree";
 import { SystemModelScreen } from "./components/SystemModelScreen";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import {
+  deleteIndexedFile,
   deleteProject,
   getProjectStats,
   listOpenRouterModels,
@@ -85,6 +91,26 @@ const stripCodeFence = (text: string) => {
   return (match ? match[1] : text).trim();
 };
 
+type WorkspacePanel = "files" | "editor" | "chat";
+
+const normalizeNewFilePath = (value: string) => {
+  const normalized = value.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized) return "";
+  return /\.[^/.]+$/.test(normalized) ? normalized : `${normalized}.gd`;
+};
+
+const getNewFileTemplate = (filePath: string) => {
+  const normalized = filePath.toLowerCase();
+  if (normalized.endsWith(".gd")) return "extends Node\n\n";
+  if (normalized.endsWith(".gdshader") || normalized.endsWith(".shader")) {
+    return "shader_type canvas_item;\n\n";
+  }
+  if (normalized.endsWith(".cs")) {
+    return "using Godot;\n\npublic partial class NewScript : Node\n{\n}\n";
+  }
+  return "";
+};
+
 const replaceRange = (source: string, range: EditorRange, replacement: string) => {
   const lines = source.split("\n");
   const startLine = range.startLineNumber - 1;
@@ -113,6 +139,19 @@ function App() {
   const [modelSwitchNotice, setModelSwitchNotice] = useState<
     (ModelSwitchEvent & { id: string }) | null
   >(null);
+  const [collapsedPanels, setCollapsedPanels] = useState<Record<WorkspacePanel, boolean>>({
+    files: false,
+    editor: false,
+    chat: false,
+  });
+  const [isChatFullscreen, setIsChatFullscreen] = useState(false);
+  const [isNewFileDialogOpen, setIsNewFileDialogOpen] = useState(false);
+  const [newFilePath, setNewFilePath] = useState("");
+  const [newFileError, setNewFileError] = useState("");
+  const [isCreatingFile, setIsCreatingFile] = useState(false);
+  const [deleteTargetFile, setDeleteTargetFile] = useState<ProjectFile | null>(null);
+  const [deleteFileError, setDeleteFileError] = useState("");
+  const [isDeletingFile, setIsDeletingFile] = useState(false);
   const {
     activeFile,
     appendAssistantToken,
@@ -171,6 +210,19 @@ function App() {
 
   const showModelSwitchNotice = useCallback((event: ModelSwitchEvent) => {
     setModelSwitchNotice({ ...event, id: makeId() });
+  }, []);
+
+  const toggleWorkspacePanel = useCallback((panel: WorkspacePanel) => {
+    if (panel === "chat") setIsChatFullscreen(false);
+    setCollapsedPanels((current) => ({
+      ...current,
+      [panel]: !current[panel],
+    }));
+  }, []);
+
+  const toggleChatFullscreen = useCallback(() => {
+    setCollapsedPanels((current) => ({ ...current, chat: false }));
+    setIsChatFullscreen((current) => !current);
   }, []);
 
   useEffect(() => {
@@ -478,33 +530,148 @@ function App() {
     }
   };
 
-  const handleCreateFile = async () => {
+  const handleCreateFile = () => {
     if (!selectedProject || !window.assistant) return;
 
-    const requestedPath = window.prompt(
-      "New Godot file path",
-      activeFile?.path.includes("/")
-        ? `${activeFile.path.slice(0, activeFile.path.lastIndexOf("/") + 1)}new_script.gd`
-        : "scripts/new_script.gd"
-    );
-    const filePath = requestedPath?.trim();
-    if (!filePath) return;
-
+    const activeDirectory = activeFile?.path.includes("/")
+      ? activeFile.path.slice(0, activeFile.path.lastIndexOf("/") + 1)
+      : "scripts/";
+    setNewFilePath(`${activeDirectory}new_script.gd`);
+    setNewFileError("");
     setError("");
+    setIsNewFileDialogOpen(true);
+  };
 
+  const handleCloseNewFileDialog = () => {
+    if (isCreatingFile) return;
+
+    setIsNewFileDialogOpen(false);
+    setNewFileError("");
+  };
+
+  const handleSubmitNewFile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedProject || !window.assistant) return;
+
+    const filePath = normalizeNewFilePath(newFilePath);
+    if (!filePath) {
+      setNewFileError("Enter a project-relative file path.");
+      return;
+    }
+
+    const text = getNewFileTemplate(filePath);
+    setNewFileError("");
+    setError("");
+    setIsCreatingFile(true);
     try {
       const file = await window.assistant.createProjectFile({
         rootPath: selectedProject.rootPath,
         filePath,
-        text: filePath.endsWith(".gd") ? "extends Node\n\n" : "",
+        text,
       });
       const files = await window.assistant.listProjectFiles({
         rootPath: selectedProject.rootPath,
       });
       updateSelectedProjectFiles(files);
+
+      if (registeredProject) {
+        await uploadFiles({
+          projectId: registeredProject.projectId,
+          files: [{ fileName: file.path, text }],
+        });
+        await refreshProjectStats(registeredProject.projectId);
+      }
+
+      setIsNewFileDialogOpen(false);
+      setNewFilePath("");
       await openFile(file, selectedProject.rootPath);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not create file.");
+      setNewFileError(caught instanceof Error ? caught.message : "Could not create file.");
+    } finally {
+      setIsCreatingFile(false);
+    }
+  };
+
+  const requestDeleteFile = (file: ProjectFile) => {
+    setDeleteTargetFile(file);
+    setDeleteFileError("");
+    setError("");
+  };
+
+  const handleCloseDeleteDialog = () => {
+    if (isDeletingFile) return;
+
+    setDeleteTargetFile(null);
+    setDeleteFileError("");
+  };
+
+  const clearActiveEditor = () => {
+    setActiveFile(undefined);
+    setFileContent("");
+    setLastSavedContent("");
+    setSelection(emptySelection);
+    setInlineRange(null);
+    setInlineState(emptyInlineState);
+  };
+
+  const handleConfirmDeleteFile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!deleteTargetFile || !selectedProject || !window.assistant) return;
+
+    const deletedPath = deleteTargetFile.path;
+    setDeleteFileError("");
+    setError("");
+    setIsDeletingFile(true);
+
+    try {
+      await window.assistant.deleteProjectFile({
+        rootPath: selectedProject.rootPath,
+        filePath: deletedPath,
+      });
+
+      let indexCleanupError = "";
+      if (registeredProject) {
+        try {
+          await deleteIndexedFile({
+            projectId: registeredProject.projectId,
+            fileName: deletedPath,
+          });
+        } catch (caught) {
+          indexCleanupError =
+            caught instanceof Error ? caught.message : "Indexed chunks were not removed.";
+        }
+      }
+
+      const files = await window.assistant.listProjectFiles({
+        rootPath: selectedProject.rootPath,
+      });
+      updateSelectedProjectFiles(files);
+
+      const nextEditorContents = { ...useAppStore.getState().editorFileContents };
+      delete nextEditorContents[deletedPath];
+      setEditorFileContents(nextEditorContents);
+
+      if (activeFile?.path === deletedPath) {
+        const nextFile = files.find((file) => file.path !== deletedPath);
+        if (nextFile) {
+          await openFile(nextFile, selectedProject.rootPath);
+        } else {
+          clearActiveEditor();
+        }
+      }
+
+      if (registeredProject) {
+        await refreshProjectStats(registeredProject.projectId);
+      }
+
+      setDeleteTargetFile(null);
+      if (indexCleanupError) {
+        setError(`File deleted, but indexed chunks were not cleared: ${indexCleanupError}`);
+      }
+    } catch (caught) {
+      setDeleteFileError(caught instanceof Error ? caught.message : "Could not delete file.");
+    } finally {
+      setIsDeletingFile(false);
     }
   };
 
@@ -751,6 +918,12 @@ function App() {
         : undefined;
   const sendDisabled =
     !registeredProject || !input.trim() || isResponding || isIndexing;
+  const workspaceStyle = {
+    "--files-column": collapsedPanels.files ? "46px" : "280px",
+    "--editor-column": collapsedPanels.editor ? "46px" : "minmax(420px, 1fr)",
+    "--chat-column": collapsedPanels.chat ? "46px" : "390px",
+  } as CSSProperties;
+  const workspaceClassName = `workspace-grid${isChatFullscreen ? " chat-fullscreen" : ""}`;
 
   if (view === "welcome") {
     return (
@@ -883,43 +1056,172 @@ function App() {
         </div>
       ) : null}
 
-      <div className="workspace-grid">
-        <FileTree
-          activePath={activeFile?.path}
-          files={selectedProject?.files || []}
-          indexedCount={indexedCount}
-          key={selectedProject?.rootPath || "empty-project"}
-          onSelect={openFile}
-          totalCount={selectedProject?.files.length || 0}
-        />
-        <EditorPanel
-          activeFile={activeFile}
-          content={fileContent}
-          projectTypeInfo={projectTypeInfo}
-          projectFiles={editorFileContents}
-          inlineState={inlineState}
-          isDirty={isDirty}
-          isSaving={isSaving}
-          onApplyInline={handleApplyInline}
-          onContentChange={setFileContent}
-          onDebugSelection={handleDebugSelection}
-          onDismissInline={() => {
-            setInlineRange(null);
-            setInlineState(emptyInlineState);
-          }}
-          onExplainSelection={handleExplainSelection}
-          onGenerateRequest={handleGenerateRequest}
-          onInlineRequest={handleInlineRequest}
-          onSave={handleSave}
-          onSelectionChange={setSelection}
-        />
+      {isNewFileDialogOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <form
+            className="new-file-dialog"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") handleCloseNewFileDialog();
+            }}
+            onSubmit={handleSubmitNewFile}
+          >
+            <div className="dialog-header">
+              <div>
+                <h2>New Godot file</h2>
+                <span>{selectedProject?.name}</span>
+              </div>
+              <button
+                className="icon-button compact-icon"
+                disabled={isCreatingFile}
+                onClick={handleCloseNewFileDialog}
+                title="Close"
+                type="button"
+              >
+                <CloseRounded />
+              </button>
+            </div>
+            <label className="dialog-body">
+              <span>Path</span>
+              <input
+                autoFocus
+                disabled={isCreatingFile}
+                onChange={(event) => setNewFilePath(event.target.value)}
+                placeholder="scripts/player_controller.gd"
+                value={newFilePath}
+              />
+            </label>
+            {newFileError ? <div className="dialog-error">{newFileError}</div> : null}
+            <div className="dialog-actions">
+              <button
+                className="secondary-action compact-action"
+                disabled={isCreatingFile}
+                onClick={handleCloseNewFileDialog}
+                type="button"
+              >
+                <CloseRounded />
+                <span>Cancel</span>
+              </button>
+              <button
+                className="primary-action compact-action"
+                disabled={isCreatingFile || !newFilePath.trim()}
+                type="submit"
+              >
+                {isCreatingFile ? <SyncRounded className="spin" /> : <CheckRounded />}
+                <span>Create</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {deleteTargetFile ? (
+        <div className="modal-backdrop" role="presentation">
+          <form
+            className="new-file-dialog"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") handleCloseDeleteDialog();
+            }}
+            onSubmit={handleConfirmDeleteFile}
+          >
+            <div className="dialog-header">
+              <div>
+                <h2>Delete file</h2>
+                <span>{deleteTargetFile.name}</span>
+              </div>
+              <button
+                className="icon-button compact-icon"
+                disabled={isDeletingFile}
+                onClick={handleCloseDeleteDialog}
+                title="Close"
+                type="button"
+              >
+                <CloseRounded />
+              </button>
+            </div>
+            <div className="dialog-body">
+              <span>Path</span>
+              <div className="delete-path-preview">{deleteTargetFile.path}</div>
+            </div>
+            {deleteFileError ? <div className="dialog-error">{deleteFileError}</div> : null}
+            <div className="dialog-actions">
+              <button
+                className="secondary-action compact-action"
+                disabled={isDeletingFile}
+                onClick={handleCloseDeleteDialog}
+                type="button"
+              >
+                <CloseRounded />
+                <span>Cancel</span>
+              </button>
+              <button
+                className="danger-action compact-action"
+                disabled={isDeletingFile}
+                type="submit"
+              >
+                {isDeletingFile ? <SyncRounded className="spin" /> : <DeleteRounded />}
+                <span>Delete</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      <div
+        className={workspaceClassName}
+        style={isChatFullscreen ? undefined : workspaceStyle}
+      >
+        {!isChatFullscreen ? (
+          <FileTree
+            activePath={activeFile?.path}
+            files={selectedProject?.files || []}
+            indexedCount={indexedCount}
+            isCollapsed={collapsedPanels.files}
+            deletingPath={isDeletingFile ? deleteTargetFile?.path : undefined}
+            key={selectedProject?.rootPath || "empty-project"}
+            onDelete={requestDeleteFile}
+            onSelect={openFile}
+            onTogglePanel={() => toggleWorkspacePanel("files")}
+            totalCount={selectedProject?.files.length || 0}
+          />
+        ) : null}
+        {!isChatFullscreen ? (
+          <EditorPanel
+            activeFile={activeFile}
+            content={fileContent}
+            projectTypeInfo={projectTypeInfo}
+            projectFiles={editorFileContents}
+            inlineState={inlineState}
+            isCollapsed={collapsedPanels.editor}
+            isDeleting={isDeletingFile && deleteTargetFile?.path === activeFile?.path}
+            isDirty={isDirty}
+            isSaving={isSaving}
+            onApplyInline={handleApplyInline}
+            onContentChange={setFileContent}
+            onDebugSelection={handleDebugSelection}
+            onDismissInline={() => {
+              setInlineRange(null);
+              setInlineState(emptyInlineState);
+            }}
+            onExplainSelection={handleExplainSelection}
+            onGenerateRequest={handleGenerateRequest}
+            onInlineRequest={handleInlineRequest}
+            onDeleteFile={requestDeleteFile}
+            onSave={handleSave}
+            onSelectionChange={setSelection}
+            onTogglePanel={() => toggleWorkspacePanel("editor")}
+          />
+        ) : null}
         <ChatPanel
           disabled={sendDisabled}
           input={input}
+          isCollapsed={collapsedPanels.chat && !isChatFullscreen}
+          isFullscreen={isChatFullscreen}
           isLoading={isResponding}
           messages={messages}
           onInputChange={setInput}
           onSend={handleSend}
+          onToggleCollapse={() => toggleWorkspacePanel("chat")}
+          onToggleFullscreen={toggleChatFullscreen}
           selectedCodeInfo={selectedCodeInfo}
         />
       </div>

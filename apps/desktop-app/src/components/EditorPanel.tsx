@@ -5,8 +5,11 @@ import {
   CheckRounded,
   CloseRounded,
   DataObjectRounded,
+  DeleteRounded,
   ForumRounded,
   ImageRounded,
+  KeyboardDoubleArrowRightRounded,
+  KeyboardDoubleArrowLeftRounded,
   SaveRounded,
   SyncRounded,
 } from "@mui/icons-material";
@@ -27,10 +30,12 @@ type EditorPanelProps = {
   activeFile?: ProjectFile;
   content: string;
   isDirty: boolean;
+  isDeleting?: boolean;
   isSaving: boolean;
   inlineState: InlineState;
   projectFiles: Record<string, string>;
   projectTypeInfo: ProjectTypeInfo;
+  isCollapsed?: boolean;
   onApplyInline: () => void;
   onContentChange: (value: string) => void;
   onDebugSelection: (selection: EditorSelection) => void;
@@ -38,8 +43,10 @@ type EditorPanelProps = {
   onExplainSelection: (selection: EditorSelection) => void;
   onGenerateRequest: (selection: EditorSelection, instruction: string) => void;
   onInlineRequest: (selection: EditorSelection, instruction: string) => void;
+  onDeleteFile?: (file: ProjectFile) => void;
   onSave: () => void;
   onSelectionChange: (selection: EditorSelection) => void;
+  onTogglePanel?: () => void;
 };
 
 const MONACO_WORKSPACE_ROOT = "file:///workspace";
@@ -246,31 +253,38 @@ const emptySelection: EditorSelection = {
 };
 
 const getLanguage = (fileName?: string) => {
-  if (!fileName) return "typescript";
-  if (fileName.endsWith(".gd")) return "gdscript";
-  if (fileName.endsWith(".gdshader") || fileName.endsWith(".shader")) return "glsl";
+  if (!fileName) return "plaintext";
+  const normalized = fileName.toLowerCase();
+  if (normalized.endsWith(".gd")) return "gdscript";
+  if (normalized.endsWith(".gdshader") || normalized.endsWith(".shader")) return "glsl";
   if (
-    fileName.endsWith(".tscn") ||
-    fileName.endsWith(".tres") ||
-    fileName.endsWith(".godot") ||
-    fileName.endsWith(".cfg") ||
-    fileName.endsWith(".ini") ||
-    fileName.endsWith(".import") ||
-    fileName.endsWith(".gdextension")
+    normalized.endsWith(".tscn") ||
+    normalized.endsWith(".tres") ||
+    normalized.endsWith(".godot") ||
+    normalized.endsWith(".cfg") ||
+    normalized.endsWith(".ini") ||
+    normalized.endsWith(".import") ||
+    normalized.endsWith(".gdextension")
   ) {
     return "ini";
   }
-  if (fileName.endsWith(".cs")) return "csharp";
-  if (fileName.endsWith(".tsx") || fileName.endsWith(".ts")) return "typescript";
-  if (fileName.endsWith(".jsx") || fileName.endsWith(".js") || fileName.endsWith(".mjs")) {
+  if (normalized.endsWith(".cs")) return "csharp";
+  if (normalized.endsWith(".tsx") || normalized.endsWith(".ts")) return "typescript";
+  if (
+    normalized.endsWith(".jsx") ||
+    normalized.endsWith(".js") ||
+    normalized.endsWith(".mjs") ||
+    normalized.endsWith(".cjs")
+  ) {
     return "javascript";
   }
-  if (fileName.endsWith(".json")) return "json";
-  if (fileName.endsWith(".css") || fileName.endsWith(".scss")) return "css";
-  if (fileName.endsWith(".html")) return "html";
-  if (fileName.endsWith(".md")) return "markdown";
-  if (fileName.endsWith(".yml") || fileName.endsWith(".yaml")) return "yaml";
-  return "typescript";
+  if (normalized.endsWith(".json")) return "json";
+  if (normalized.endsWith(".css") || normalized.endsWith(".scss")) return "css";
+  if (normalized.endsWith(".html")) return "html";
+  if (normalized.endsWith(".md")) return "markdown";
+  if (normalized.endsWith(".txt")) return "plaintext";
+  if (normalized.endsWith(".yml") || normalized.endsWith(".yaml")) return "yaml";
+  return "plaintext";
 };
 
 const supportsTypeScriptWorker = (fileName: string) =>
@@ -783,8 +797,10 @@ export function EditorPanel({
   activeFile,
   content,
   isDirty,
+  isDeleting = false,
   isSaving,
   inlineState,
+  isCollapsed = false,
   projectFiles,
   projectTypeInfo,
   onApplyInline,
@@ -794,8 +810,10 @@ export function EditorPanel({
   onExplainSelection,
   onGenerateRequest,
   onInlineRequest,
+  onDeleteFile,
   onSave,
   onSelectionChange,
+  onTogglePanel,
 }: EditorPanelProps) {
   const editorRef = useRef<MonacoEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
@@ -962,6 +980,22 @@ export function EditorPanel({
     onDismissInline();
   };
 
+  if (isCollapsed) {
+    return (
+      <section className="panel panel-rail editor-panel" aria-label="Editor collapsed">
+        <button
+          className="panel-rail-button"
+          onClick={onTogglePanel}
+          title="Expand editor"
+          type="button"
+        >
+          <KeyboardDoubleArrowRightRounded />
+          <span>Editor</span>
+        </button>
+      </section>
+    );
+  }
+
   return (
     <section className="panel editor-panel">
       <div className="panel-header editor-header">
@@ -975,12 +1009,29 @@ export function EditorPanel({
         <div className="editor-actions">
           <button
             className="icon-button compact-icon"
+            onClick={onTogglePanel}
+            title="Collapse editor"
+            type="button"
+          >
+            <KeyboardDoubleArrowLeftRounded />
+          </button>
+          <button
+            className="icon-button compact-icon"
             disabled={!canEditText || isSaving}
             onClick={onSave}
             title="Save"
             type="button"
           >
             {isSaving ? <SyncRounded className="spin" /> : <SaveRounded />}
+          </button>
+          <button
+            className="icon-button compact-icon danger-icon"
+            disabled={!activeFile || isDeleting}
+            onClick={() => activeFile && onDeleteFile?.(activeFile)}
+            title="Delete file"
+            type="button"
+          >
+            {isDeleting ? <SyncRounded className="spin" /> : <DeleteRounded />}
           </button>
           <button
             className="icon-button compact-icon"

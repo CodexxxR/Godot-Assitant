@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld("assistant", {
   loadProjectTypeInfo: (payload) => ipcRenderer.invoke("project:load-type-info", payload),
   writeProjectFile: (payload) => ipcRenderer.invoke("project:write-file", payload),
   createProjectFile: (payload) => ipcRenderer.invoke("project:create-file", payload),
+  deleteProjectFile: (payload) => ipcRenderer.invoke("project:delete-file", payload),
   getSystemInfo: () => ipcRenderer.invoke("system:get-info"),
 });

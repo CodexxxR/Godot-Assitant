@@ -1,10 +1,13 @@
 import { useMemo, useState } from "react";
 import {
+  DeleteRounded,
   FolderRounded,
   ImageRounded,
   InsertDriveFileRounded,
   KeyboardArrowDownRounded,
   KeyboardArrowRightRounded,
+  KeyboardDoubleArrowLeftRounded,
+  KeyboardDoubleArrowRightRounded,
 } from "@mui/icons-material";
 import type { FileTreeNode, ProjectFile } from "../types/project";
 
@@ -13,7 +16,11 @@ type FileTreeProps = {
   activePath?: string;
   indexedCount: number;
   totalCount: number;
+  isCollapsed?: boolean;
+  deletingPath?: string;
   onSelect: (file: ProjectFile) => void;
+  onDelete?: (file: ProjectFile) => void;
+  onTogglePanel?: () => void;
 };
 
 const buildTree = (files: ProjectFile[]): FileTreeNode[] => {
@@ -60,15 +67,26 @@ const buildTree = (files: ProjectFile[]): FileTreeNode[] => {
   return root.children;
 };
 
+const collectFolderPaths = (nodes: FileTreeNode[]): string[] =>
+  nodes.flatMap((node) =>
+    node.type === "folder" ? [node.path, ...collectFolderPaths(node.children)] : []
+  );
+
 export function FileTree({
   files,
   activePath,
   indexedCount,
   totalCount,
+  isCollapsed = false,
+  deletingPath,
   onSelect,
+  onDelete,
+  onTogglePanel,
 }: FileTreeProps) {
   const tree = useMemo(() => buildTree(files), [files]);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set(collectFolderPaths(tree))
+  );
 
   const toggleFolder = (path: string) => {
     setCollapsed((current) => {
@@ -104,18 +122,49 @@ export function FileTree({
     }
 
     return (
-      <button
+      <div
         key={node.path}
         className={`tree-row file-row ${activePath === node.path ? "active" : ""}`}
         style={{ paddingLeft: 28 + depth * 14 }}
-        type="button"
-        onClick={() => node.file && onSelect(node.file)}
       >
-        {node.file?.kind === "image" ? <ImageRounded /> : <InsertDriveFileRounded />}
-        <span>{node.name}</span>
-      </button>
+        <button
+          className="tree-file-button"
+          type="button"
+          onClick={() => node.file && onSelect(node.file)}
+        >
+          {node.file?.kind === "image" ? <ImageRounded /> : <InsertDriveFileRounded />}
+          <span>{node.name}</span>
+        </button>
+        {node.file && onDelete ? (
+          <button
+            className="tree-delete-button"
+            disabled={deletingPath === node.file.path}
+            onClick={() => node.file && onDelete(node.file)}
+            title={`Delete ${node.name}`}
+            type="button"
+          >
+            <DeleteRounded />
+          </button>
+        ) : null}
+      </div>
     );
   };
+
+  if (isCollapsed) {
+    return (
+      <section className="panel panel-rail left-panel" aria-label="Files collapsed">
+        <button
+          className="panel-rail-button"
+          onClick={onTogglePanel}
+          title="Expand files"
+          type="button"
+        >
+          <KeyboardDoubleArrowRightRounded />
+          <span>Files</span>
+        </button>
+      </section>
+    );
+  }
 
   return (
     <section className="panel left-panel">
@@ -123,6 +172,16 @@ export function FileTree({
         <div>
           <h2>Files</h2>
           <span>{totalCount ? `${indexedCount}/${totalCount} indexed` : "No project"}</span>
+        </div>
+        <div className="panel-header-actions">
+          <button
+            className="icon-button compact-icon"
+            onClick={onTogglePanel}
+            title="Collapse files"
+            type="button"
+          >
+            <KeyboardDoubleArrowLeftRounded />
+          </button>
         </div>
       </div>
       <div className="tree-scroller">

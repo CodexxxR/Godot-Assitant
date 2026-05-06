@@ -1,7 +1,7 @@
 const config = require("../config");
 const { embedTexts } = require("./embedding.service");
 const { addDocuments, deleteFileChunks } = require("./vector.service");
-const { recordIndexedFile } = require("./project.service");
+const { forgetIndexedFile, recordIndexedFile } = require("./project.service");
 const { chunkCode } = require("../utils/chunk");
 const { sha1 } = require("../utils/hash");
 const { isSupportedFileName, requireString } = require("../utils/validation");
@@ -260,4 +260,24 @@ const indexFiles = async ({ projectId, files }) => {
   };
 };
 
-module.exports = { indexFile, indexFiles };
+const deleteIndexedFile = async ({ projectId, fileName }) => {
+  const validProjectId = requireString(projectId, "projectId");
+  const validFileName = requireString(fileName, "fileName");
+  const deletedChunks = await deleteFileChunks({
+    projectId: validProjectId,
+    fileName: validFileName,
+  });
+  const fileForgotten = forgetIndexedFile({
+    projectId: validProjectId,
+    fileName: validFileName,
+  });
+
+  return {
+    projectId: validProjectId,
+    fileName: validFileName,
+    deletedChunks,
+    fileForgotten,
+  };
+};
+
+module.exports = { indexFile, indexFiles, deleteIndexedFile };

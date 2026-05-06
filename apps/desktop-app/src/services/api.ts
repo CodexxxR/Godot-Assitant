@@ -164,6 +164,24 @@ export const uploadFiles = async (payload: {
   return parseJsonResponse(response);
 };
 
+export const deleteIndexedFile = async (payload: {
+  projectId: string;
+  fileName: string;
+}): Promise<{
+  projectId: string;
+  fileName: string;
+  deletedChunks: number;
+  fileForgotten: boolean;
+}> => {
+  const response = await fetch(`${API_BASE_URL}/upload/file`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  return parseJsonResponse(response);
+};
+
 export const streamChat = async (
   payload: {
     projectId: string;

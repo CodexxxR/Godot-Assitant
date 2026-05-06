@@ -41,6 +41,12 @@ declare global {
         filePath: string;
         text?: string;
       }) => Promise<ProjectFile>;
+      deleteProjectFile: (payload: {
+        rootPath: string;
+        filePath: string;
+      }) => Promise<{
+        filePath: string;
+      }>;
       getSystemInfo: () => Promise<SystemInfo>;
     };
   }

@@ -157,6 +157,27 @@ const recordIndexedFile = ({ projectId, fileName, text, chunks, knownFileNames =
   return project.files[normalizedFileName];
 };
 
+const forgetIndexedFile = ({ projectId, fileName }) => {
+  const project = getProject(projectId);
+  if (!project) return false;
+
+  const normalizedFileName = normalizePath(fileName);
+  const existed = Boolean(project.files?.[normalizedFileName]);
+  if (!existed) return false;
+
+  delete project.files[normalizedFileName];
+  project.lastIndexedAt = new Date().toISOString();
+  recomputeFileRelationships(project);
+  persistProjects();
+
+  logger.info("Indexed file forgotten", {
+    projectId,
+    fileName: normalizedFileName,
+  });
+
+  return true;
+};
+
 const getProjectGraph = (projectId, focusFileName) => {
   const project = getProject(projectId);
   if (!project) {
@@ -224,5 +245,6 @@ module.exports = {
   getProjectStats,
   listProjects,
   recordIndexedFile,
+  forgetIndexedFile,
   forgetProject,
 };
