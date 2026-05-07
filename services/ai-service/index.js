@@ -6,6 +6,7 @@ const projectRoutes = require("./routes/project.routes");
 const uploadRoutes = require("./routes/upload.routes");
 const chatRoutes = require("./routes/chat.routes");
 const modelRoutes = require("./routes/model.routes");
+const generationRoutes = require("./routes/generation.routes");
 const { logger } = require("./utils/logger");
 
 const app = express();
@@ -27,6 +28,7 @@ app.use("/project", projectRoutes);
 app.use("/upload", uploadRoutes);
 app.use("/chat", chatRoutes);
 app.use("/models", modelRoutes);
+app.use("/generation", generationRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` });

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeImage } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, webUtils } = require("electron");
 const { execFile } = require("child_process");
 const fs = require("fs/promises");
 const os = require("os");
@@ -61,6 +61,40 @@ const PREVIEWABLE_IMAGE_EXTENSIONS = new Set([
   ".ico",
 ]);
 const SUPPORTED_EXTENSIONS = new Set([...TEXT_EXTENSIONS, ...IMAGE_EXTENSIONS]);
+const GENERATION_ASSET_EXTENSIONS = new Set([
+  ...IMAGE_EXTENSIONS,
+  ".wav",
+  ".ogg",
+  ".mp3",
+  ".flac",
+  ".ttf",
+  ".otf",
+  ".glb",
+  ".gltf",
+  ".obj",
+  ".fbx",
+  ".dae",
+  ".blend",
+  ".json",
+  ".csv",
+  ".txt",
+  ".tres",
+  ".res",
+]);
+const GENERATED_FILE_EXTENSIONS = new Set([
+  ...TEXT_EXTENSIONS,
+  ".gitignore",
+]);
+const GENERATED_PROJECT_PATH_PREFIXES = [
+  "project.godot",
+  "README.md",
+  ".gitignore",
+  "scenes/",
+  "scripts/",
+  "resources/",
+  "data/",
+  "assets/",
+];
 const IMAGE_MIME_TYPES = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -210,6 +244,119 @@ async function pathStat(targetPath) {
 
 const normalizeRelativePath = (rootPath, targetPath) =>
   path.relative(rootPath, targetPath).replace(/\\/g, "/");
+
+const normalizeGeneratedPath = (filePath) =>
+  String(filePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+
+const sanitizeProjectFolderName = (name) => {
+  const cleaned = String(name || "Generated Godot Project")
+    .replace(/[^a-zA-Z0-9 _-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+
+  return cleaned || "Generated Godot Project";
+};
+
+const sanitizeAssetFileName = (fileName) => {
+  const parsed = path.parse(fileName);
+  const safeBase =
+    parsed.name
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 80) || "asset";
+  return `${safeBase}${parsed.ext.toLowerCase()}`;
+};
+
+const createUniqueName = (fileName, usedNames) => {
+  const parsed = path.parse(fileName);
+  let candidate = fileName;
+  let counter = 2;
+
+  while (usedNames.has(candidate.toLowerCase())) {
+    candidate = `${parsed.name}_${counter}${parsed.ext}`;
+    counter += 1;
+  }
+
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+};
+
+const getGenerationAssetDestination = (sourcePath, usedNames) => {
+  const safeName = createUniqueName(sanitizeAssetFileName(path.basename(sourcePath)), usedNames);
+  return `assets/imported/${safeName}`;
+};
+
+const isGeneratedProjectFilePath = (filePath) => {
+  const normalized = normalizeGeneratedPath(filePath);
+  if (!normalized || normalized.includes("../") || path.isAbsolute(normalized)) return false;
+  if (!GENERATED_FILE_EXTENSIONS.has(path.extname(normalized).toLowerCase())) return false;
+
+  return GENERATED_PROJECT_PATH_PREFIXES.some((prefix) =>
+    prefix.endsWith("/") ? normalized.startsWith(prefix) : normalized === prefix
+  );
+};
+
+const createUniqueProjectDirectory = async (parentPath, projectName) => {
+  const parent = path.resolve(parentPath);
+  const baseName = sanitizeProjectFolderName(projectName);
+  let candidate = path.join(parent, baseName);
+  let counter = 2;
+
+  while (await pathStat(candidate)) {
+    candidate = path.join(parent, `${baseName} ${counter}`);
+    counter += 1;
+  }
+
+  await fs.mkdir(candidate, { recursive: true });
+  return candidate;
+};
+
+const collectGenerationAssetFiles = async (targetPath, files = []) => {
+  const stats = await pathStat(targetPath);
+  if (!stats) return files;
+
+  if (stats.isDirectory()) {
+    const entries = await fs.readdir(targetPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      await collectGenerationAssetFiles(path.join(targetPath, entry.name), files);
+      if (files.length >= 80) return files;
+    }
+    return files;
+  }
+
+  if (!stats.isFile()) return files;
+
+  const extension = path.extname(targetPath).toLowerCase();
+  if (!GENERATION_ASSET_EXTENSIONS.has(extension)) return files;
+
+  files.push({
+    sourcePath: path.resolve(targetPath),
+    name: path.basename(targetPath),
+    extension,
+    size: stats.size,
+    destinationPath: "",
+  });
+
+  return files;
+};
+
+const inspectGenerationAssets = async (paths = []) => {
+  const collected = [];
+  for (const filePath of paths) {
+    const normalizedPath = String(filePath || "");
+    if (!normalizedPath) continue;
+    await collectGenerationAssetFiles(normalizedPath, collected);
+  }
+
+  const usedNames = new Set();
+  return collected.slice(0, 80).map((asset) => ({
+    ...asset,
+    destinationPath: getGenerationAssetDestination(asset.sourcePath, usedNames),
+  }));
+};
 
 const stripJsonComments = (text) =>
   text
@@ -578,6 +725,53 @@ ipcMain.handle("project:select-folder", async () => {
   };
 });
 
+ipcMain.handle("project:select-generation-parent", async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openDirectory", "createDirectory"],
+    title: "Select Output Folder for Generated Godot Project",
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return result.filePaths[0];
+});
+
+ipcMain.handle("project:select-generation-assets", async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile", "multiSelections"],
+    title: "Select Assets for Generated Godot Project",
+    filters: [
+      {
+        name: "Godot assets",
+        extensions: Array.from(GENERATION_ASSET_EXTENSIONS).map((extension) =>
+          extension.replace(/^\./, "")
+        ),
+      },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return [];
+  }
+
+  return inspectGenerationAssets(result.filePaths);
+});
+
+ipcMain.handle("project:inspect-generation-assets", async (_event, payload) =>
+  inspectGenerationAssets(Array.isArray(payload?.paths) ? payload.paths : [])
+);
+
+ipcMain.handle("project:get-dropped-file-path", (_event, file) => {
+  try {
+    return webUtils.getPathForFile(file) || "";
+  } catch {
+    return "";
+  }
+});
+
 ipcMain.handle("project:remember", async (_event, payload) => {
   const rootPath = String(payload?.rootPath || "");
   if (!rootPath) return false;
@@ -760,6 +954,72 @@ ipcMain.handle("project:delete-file", async (_event, payload) => {
   return {
     filePath: normalizeRelativePath(path.resolve(rootPath), fullPath),
   };
+});
+
+ipcMain.handle("project:write-generated", async (_event, payload) => {
+  const parentPath = String(payload?.parentPath || "");
+  const projectName = sanitizeProjectFolderName(payload?.projectName);
+  const files = Array.isArray(payload?.files) ? payload.files : [];
+  const assetPaths = Array.isArray(payload?.assetPaths) ? payload.assetPaths : [];
+  const parentStats = await pathStat(parentPath);
+
+  if (!parentStats?.isDirectory()) {
+    throw new Error("Output folder does not exist");
+  }
+
+  const validFiles = files
+    .map((file) => ({
+      path: normalizeGeneratedPath(file?.path),
+      content: String(file?.content ?? ""),
+    }))
+    .filter((file) => isGeneratedProjectFilePath(file.path));
+
+  if (!validFiles.some((file) => file.path === "project.godot")) {
+    throw new Error("Generated project manifest must include project.godot");
+  }
+
+  const rootPath = await createUniqueProjectDirectory(parentPath, projectName);
+  const copiedAssets = [];
+  const inspectedAssets = await inspectGenerationAssets(assetPaths);
+
+  for (const asset of inspectedAssets) {
+    const targetPath = resolveProjectFile(rootPath, asset.destinationPath);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.copyFile(asset.sourcePath, targetPath);
+    copiedAssets.push({
+      ...asset,
+      sourcePath: asset.sourcePath,
+      destinationPath: asset.destinationPath,
+    });
+  }
+
+  for (const file of validFiles) {
+    const targetPath = resolveProjectFile(rootPath, file.path);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, file.content, "utf8");
+  }
+
+  const project = {
+    rootPath,
+    name: path.basename(rootPath),
+    files: await walkProject(rootPath),
+    copiedAssets,
+  };
+
+  await fs.writeFile(
+    getLastProjectFile(),
+    JSON.stringify(
+      {
+        rootPath,
+        name: project.name,
+        rememberedAt: new Date().toISOString(),
+      },
+      null,
+      2
+    )
+  );
+
+  return project;
 });
 
 app.whenReady().then(createWindow);

@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 import type {
+  GeneratedProjectFile,
+  GenerationAsset,
   ProjectAsset,
   ProjectFile,
   ProjectTypeInfo,
@@ -12,6 +14,12 @@ declare global {
   interface Window {
     assistant?: {
       selectProjectFolder: () => Promise<SelectedProject | null>;
+      selectGenerationParentFolder: () => Promise<string | null>;
+      selectGenerationAssets: () => Promise<GenerationAsset[]>;
+      inspectGenerationAssets: (payload: {
+        paths: string[];
+      }) => Promise<GenerationAsset[]>;
+      getDroppedFilePath: (file: File) => Promise<string>;
       rememberProject: (payload: {
         rootPath: string;
         name: string;
@@ -47,6 +55,12 @@ declare global {
       }) => Promise<{
         filePath: string;
       }>;
+      writeGeneratedProject: (payload: {
+        parentPath: string;
+        projectName: string;
+        files: GeneratedProjectFile[];
+        assetPaths: string[];
+      }) => Promise<SelectedProject>;
       getSystemInfo: () => Promise<SystemInfo>;
     };
   }

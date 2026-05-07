@@ -11,6 +11,7 @@ import {
   NoteAddRounded,
   RefreshRounded,
   RestartAltRounded,
+  SportsEsportsRounded,
   SwapHorizRounded,
   SyncRounded,
 } from "@mui/icons-material";
@@ -18,11 +19,13 @@ import "./App.css";
 import { ChatPanel } from "./components/ChatPanel";
 import { EditorPanel } from "./components/EditorPanel";
 import { FileTree } from "./components/FileTree";
+import { ProjectGeneratorScreen } from "./components/ProjectGeneratorScreen";
 import { SystemModelScreen } from "./components/SystemModelScreen";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import {
   deleteIndexedFile,
   deleteProject,
+  generateGodotProject,
   getProjectStats,
   listOpenRouterModels,
   registerProject,
@@ -43,6 +46,8 @@ import type {
   ChatMessage,
   EditorRange,
   EditorSelection,
+  GeneratedProjectManifest,
+  GenerationAsset,
   ProjectFile,
   RegisteredProject,
   SelectedProject,
@@ -152,6 +157,14 @@ function App() {
   const [deleteTargetFile, setDeleteTargetFile] = useState<ProjectFile | null>(null);
   const [deleteFileError, setDeleteFileError] = useState("");
   const [isDeletingFile, setIsDeletingFile] = useState(false);
+  const [generatorPrompt, setGeneratorPrompt] = useState("");
+  const [generatorAssets, setGeneratorAssets] = useState<GenerationAsset[]>([]);
+  const [generatorOutputFolder, setGeneratorOutputFolder] = useState("");
+  const [generatorError, setGeneratorError] = useState("");
+  const [generationStatus, setGenerationStatus] = useState("");
+  const [generatedManifest, setGeneratedManifest] =
+    useState<GeneratedProjectManifest>();
+  const [isGeneratingProject, setIsGeneratingProject] = useState(false);
   const {
     activeFile,
     appendAssistantToken,
@@ -501,6 +514,67 @@ function App() {
     };
   }, []);
 
+  const handleGenerateProject = async () => {
+    if (!window.assistant) {
+      setGeneratorError("Electron project writer is unavailable.");
+      return;
+    }
+
+    const prompt = generatorPrompt.trim();
+    if (!prompt) {
+      setGeneratorError("Describe the Godot project to generate.");
+      return;
+    }
+    if (!generatorOutputFolder) {
+      setGeneratorError("Choose an output folder first.");
+      return;
+    }
+
+    setIsGeneratingProject(true);
+    setGeneratorError("");
+    setError("");
+    setGeneratedManifest(undefined);
+
+    try {
+      setGenerationStatus("Designing project");
+      const manifest = await generateGodotProject({
+        prompt,
+        assets: generatorAssets.map((asset) => ({
+          name: asset.name,
+          extension: asset.extension,
+          size: asset.size,
+          destinationPath: asset.destinationPath,
+        })),
+      });
+      setGeneratedManifest(manifest);
+
+      setGenerationStatus("Writing files");
+      const project = await window.assistant.writeGeneratedProject({
+        parentPath: generatorOutputFolder,
+        projectName: manifest.projectName,
+        files: manifest.files,
+        assetPaths: generatorAssets.map((asset) => asset.sourcePath),
+      });
+
+      setGenerationStatus("Indexing project");
+      await activateProject(project, true);
+      setView("workspace");
+
+      if (manifest.usedFallback) {
+        setError(
+          "The selected free model did not return a valid project manifest, so a runnable fallback Godot prototype was generated."
+        );
+      }
+    } catch (caught) {
+      setGeneratorError(
+        caught instanceof Error ? caught.message : "Could not generate Godot project."
+      );
+    } finally {
+      setGenerationStatus("");
+      setIsGeneratingProject(false);
+    }
+  };
+
   const handleSelectProject = async () => {
     if (!window.assistant) {
       setError("Electron project picker is unavailable.");
@@ -528,6 +602,53 @@ function App() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not select model.");
     }
+  };
+
+  const handleSelectGeneratorOutput = async () => {
+    if (!window.assistant) return;
+
+    const folder = await window.assistant.selectGenerationParentFolder();
+    if (folder) {
+      setGeneratorOutputFolder(folder);
+      setGeneratorError("");
+    }
+  };
+
+  const addGeneratorAssetPaths = async (paths: string[]) => {
+    if (!window.assistant) return;
+
+    const nextPaths = Array.from(
+      new Set([...generatorAssets.map((asset) => asset.sourcePath), ...paths].filter(Boolean))
+    );
+    const assets = await window.assistant.inspectGenerationAssets({ paths: nextPaths });
+    setGeneratorAssets(assets);
+    setGeneratorError("");
+  };
+
+  const handleSelectGeneratorAssets = async () => {
+    if (!window.assistant) return;
+
+    const assets = await window.assistant.selectGenerationAssets();
+    await addGeneratorAssetPaths(assets.map((asset) => asset.sourcePath));
+  };
+
+  const handleDropGeneratorAssets = async (files: File[]) => {
+    if (!window.assistant || files.length === 0) return;
+
+    const paths = (
+      await Promise.all(files.map((file) => window.assistant!.getDroppedFilePath(file)))
+    ).filter(Boolean);
+    await addGeneratorAssetPaths(paths);
+  };
+
+  const handleRemoveGeneratorAsset = async (sourcePath: string) => {
+    if (!window.assistant) return;
+
+    const paths = generatorAssets
+      .map((asset) => asset.sourcePath)
+      .filter((path) => path !== sourcePath);
+    const assets = await window.assistant.inspectGenerationAssets({ paths });
+    setGeneratorAssets(assets);
   };
 
   const handleCreateFile = () => {
@@ -947,9 +1068,48 @@ function App() {
           canContinue={Boolean(selectedProject && registeredProject)}
           isIndexing={isIndexing}
           onContinue={() => setView("workspace")}
+          onGenerateProject={() => setView("generator")}
           onOpenModels={handleOpenSystemModels}
           onOpenProject={handleSelectProject}
           projectName={registeredProject?.name}
+        />
+      </main>
+    );
+  }
+
+  if (view === "generator") {
+    return (
+      <main className="app-shell">
+        {modelSwitchNotice ? (
+          <div className="model-switch-ribbon" key={modelSwitchNotice.id} role="status">
+            <SwapHorizRounded />
+            <span>
+              Free model switched from {modelSwitchNotice.from} to {modelSwitchNotice.to}
+            </span>
+            <div className="ribbon-timer" />
+          </div>
+        ) : null}
+        {error ? (
+          <div className="error-banner">
+            <ErrorOutlineRounded />
+            <span>{error}</span>
+          </div>
+        ) : null}
+        <ProjectGeneratorScreen
+          assets={generatorAssets}
+          error={generatorError}
+          generatedManifest={generatedManifest}
+          isGenerating={isGeneratingProject}
+          onAddAssets={handleSelectGeneratorAssets}
+          onAssetDrop={handleDropGeneratorAssets}
+          onBack={() => setView(selectedProject && registeredProject ? "workspace" : "welcome")}
+          onGenerate={handleGenerateProject}
+          onOutputFolder={handleSelectGeneratorOutput}
+          onPromptChange={setGeneratorPrompt}
+          onRemoveAsset={handleRemoveGeneratorAsset}
+          outputFolder={generatorOutputFolder}
+          prompt={generatorPrompt}
+          status={generationStatus}
         />
       </main>
     );
@@ -1026,6 +1186,16 @@ function App() {
           >
             <NoteAddRounded />
             <span>New file</span>
+          </button>
+          <button
+            className="toolbar-button"
+            disabled={isIndexing || isResponding || isGeneratingProject}
+            onClick={() => setView("generator")}
+            title="Generate Godot project"
+            type="button"
+          >
+            <SportsEsportsRounded />
+            <span>Generate</span>
           </button>
           <button
             className="toolbar-button"

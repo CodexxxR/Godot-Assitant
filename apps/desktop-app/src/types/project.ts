@@ -17,10 +17,34 @@ export type ProjectAsset = {
   height: number;
 };
 
+export type GenerationAsset = {
+  sourcePath: string;
+  name: string;
+  extension: string;
+  size: number;
+  destinationPath: string;
+};
+
+export type GeneratedProjectFile = {
+  path: string;
+  content: string;
+};
+
+export type GeneratedProjectManifest = {
+  projectName: string;
+  summary: string;
+  mainScene: string;
+  files: GeneratedProjectFile[];
+  notes: string[];
+  model?: string;
+  usedFallback?: boolean;
+};
+
 export type SelectedProject = {
   rootPath: string;
   name: string;
   files: ProjectFile[];
+  copiedAssets?: GenerationAsset[];
 };
 
 export type ProjectTypeLib = {

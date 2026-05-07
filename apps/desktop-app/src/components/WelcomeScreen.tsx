@@ -6,6 +6,7 @@ import {
   ForumRounded,
   PsychologyRounded,
   SmartToyRounded,
+  SportsEsportsRounded,
 } from "@mui/icons-material";
 
 type WelcomeScreenProps = {
@@ -13,6 +14,7 @@ type WelcomeScreenProps = {
   isIndexing: boolean;
   projectName?: string;
   onContinue: () => void;
+  onGenerateProject: () => void;
   onOpenModels: () => void;
   onOpenProject: () => void;
 };
@@ -40,6 +42,7 @@ export function WelcomeScreen({
   isIndexing,
   projectName,
   onContinue,
+  onGenerateProject,
   onOpenModels,
   onOpenProject,
 }: WelcomeScreenProps) {
@@ -71,6 +74,10 @@ export function WelcomeScreen({
           <button className="secondary-action" onClick={onOpenModels} type="button">
             <CloudQueueRounded />
             <span>OpenRouter models</span>
+          </button>
+          <button className="secondary-action" onClick={onGenerateProject} type="button">
+            <SportsEsportsRounded />
+            <span>Generate project</span>
           </button>
           <button
             className="secondary-action"

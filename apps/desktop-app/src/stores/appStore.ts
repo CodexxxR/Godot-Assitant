@@ -11,7 +11,7 @@ import type {
   SystemInfo,
 } from "../types/project";
 
-export type AppView = "welcome" | "system" | "workspace";
+export type AppView = "welcome" | "system" | "generator" | "workspace";
 
 export type InlineState = {
   isLoading: boolean;

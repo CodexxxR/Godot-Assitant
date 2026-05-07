@@ -1,4 +1,6 @@
 import type {
+  GeneratedProjectManifest,
+  GenerationAsset,
   OpenRouterModelCatalog,
   ProjectStats,
   RegisteredProject,
@@ -180,6 +182,22 @@ export const deleteIndexedFile = async (payload: {
   });
 
   return parseJsonResponse(response);
+};
+
+export const generateGodotProject = async (payload: {
+  prompt: string;
+  assets: Pick<
+    GenerationAsset,
+    "name" | "extension" | "size" | "destinationPath"
+  >[];
+}): Promise<GeneratedProjectManifest> => {
+  const response = await fetch(`${API_BASE_URL}/generation/godot-project`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  return parseJsonResponse<GeneratedProjectManifest>(response);
 };
 
 export const streamChat = async (
