@@ -1,6 +1,7 @@
 const config = require("../config");
 const { logger } = require("../utils/logger");
 const { getAvailableFreeModelIds } = require("./model.service");
+const { getModelRole, getRoleModelsToTry, isFreeModelId } = require("./generation/model-roles");
 
 const requireApiKey = () => {
   if (!config.openRouter.apiKey) {
@@ -63,6 +64,7 @@ const parseOpenRouterErrorDetail = (detail = "") => {
 
 const getOpenRouterErrorMessage = (detail = "") => {
   const parsed = parseOpenRouterErrorDetail(detail);
+  if (typeof parsed?.error === "string") return parsed.error;
   return (
     parsed?.error?.metadata?.raw ||
     parsed?.error?.message ||
@@ -71,15 +73,27 @@ const getOpenRouterErrorMessage = (detail = "") => {
   );
 };
 
+const isSpendLimitError = ({ status, detail }) => {
+  const message = getOpenRouterErrorMessage(detail);
+  return (
+    status === 402 ||
+    /spend limit|spending limit|usd spend|payment required/i.test(message)
+  );
+};
+
 const shouldTryFreeFallback = ({ status, detail }) =>
   status === 429 || /rate[- ]limited|temporarily unavailable|overloaded/i.test(detail);
 
 const createOpenRouterError = ({ status, detail, model, attemptedModels }) => {
   const message = getOpenRouterErrorMessage(detail);
+  const isSpendLimit = isSpendLimitError({ status, detail });
   const error = new Error(
-    `OpenRouter generation failed for ${model} (${status}): ${message}`
+    isSpendLimit
+      ? `OpenRouter API key spend limit exceeded. Free models still require an OpenRouter key that is allowed to make requests. Increase or reset this key's USD spend limit in OpenRouter, switch to another OPENROUTER_API_KEY, or create a new key, then restart the app.`
+      : `OpenRouter generation failed for ${model} (${status}): ${message}`
   );
-  error.statusCode = status === 429 ? 429 : 502;
+  error.statusCode = isSpendLimit ? 402 : status === 429 ? 429 : 502;
+  error.code = isSpendLimit ? "OPENROUTER_SPEND_LIMIT_EXCEEDED" : undefined;
   error.openRouterStatus = status;
   error.openRouterModel = model;
   error.attemptedModels = attemptedModels;
@@ -87,7 +101,69 @@ const createOpenRouterError = ({ status, detail, model, attemptedModels }) => {
   return error;
 };
 
-const getModelsToTry = async () => {
+const createStreamTimeoutError = ({ model, role, elapsedMs, timeoutMs }) => {
+  const error = new Error(
+    `OpenRouter stream timed out for ${model}${role ? ` (${role})` : ""} after ${Math.round(
+      elapsedMs / 1000
+    )}s. The free provider may be overloaded; try again or choose another free model.`
+  );
+  error.statusCode = 504;
+  error.code = "OPENROUTER_STREAM_TIMEOUT";
+  error.openRouterModel = model;
+  error.openRouterRole = role;
+  error.timeoutMs = timeoutMs;
+  return error;
+};
+
+const readStreamChunk = async ({ reader, model, role, startedAt }) => {
+  const elapsedMs = Date.now() - startedAt;
+  const remainingTotalMs = config.openRouter.streamTotalTimeoutMs - elapsedMs;
+  const timeoutMs = Math.min(config.openRouter.streamIdleTimeoutMs, remainingTotalMs);
+
+  if (timeoutMs <= 0) {
+    throw createStreamTimeoutError({
+      model,
+      role,
+      elapsedMs,
+      timeoutMs: config.openRouter.streamTotalTimeoutMs,
+    });
+  }
+
+  let timeout;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          reader.cancel().catch(() => {});
+          reject(
+            createStreamTimeoutError({
+              model,
+              role,
+              elapsedMs: Date.now() - startedAt,
+              timeoutMs,
+            })
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const getModelsToTry = async (roleName, modelCandidates) => {
+  if (Array.isArray(modelCandidates) && modelCandidates.length > 0) {
+    return Array.from(new Set(modelCandidates.map(String).map((model) => model.trim())))
+      .filter(Boolean)
+      .filter(isFreeModelId);
+  }
+
+  if (roleName) {
+    const roleModels = getRoleModelsToTry(roleName);
+    if (roleModels.length > 0) return roleModels;
+  }
+
   const selectedModel = config.openRouter.chatModel;
   const models = [selectedModel];
 
@@ -105,7 +181,14 @@ const getModelsToTry = async () => {
   return models.slice(0, Math.max(1, config.openRouter.freeFallbackAttempts));
 };
 
-const openChatCompletionStream = async ({ model, prompt, system, messages }) =>
+const openChatCompletionStream = async ({
+  model,
+  prompt,
+  system,
+  messages,
+  temperature = 0.18,
+  maxTokens = config.openRouter.maxTokens,
+}) =>
   withTimeout((signal) =>
     fetch(`${config.openRouter.baseUrl}/chat/completions`, {
       method: "POST",
@@ -119,25 +202,37 @@ const openChatCompletionStream = async ({ model, prompt, system, messages }) =>
         model,
         messages: buildMessages({ prompt, system, messages }),
         stream: true,
-        temperature: 0.18,
-        max_tokens: config.openRouter.maxTokens,
+        temperature,
+        max_tokens: maxTokens,
       }),
       signal,
     })
   );
 
-const getOpenRouterResponse = async ({ prompt, system, messages }) => {
+const getOpenRouterResponse = async ({ prompt, system, messages, role, models }) => {
   const attemptedModels = [];
   let lastError;
+  const roleConfig = role ? getModelRole(role) : null;
+  const temperature = roleConfig?.temperature ?? 0.18;
+  const maxTokens = roleConfig?.maxTokens || config.openRouter.maxTokens;
 
-  for (const model of await getModelsToTry()) {
+  for (const model of await getModelsToTry(role, models)) {
     attemptedModels.push(model);
-    const res = await openChatCompletionStream({ model, prompt, system, messages });
+    const res = await openChatCompletionStream({
+      model,
+      prompt,
+      system,
+      messages,
+      temperature,
+      maxTokens,
+    });
 
     if (res.ok && res.body) {
-      if (model !== config.openRouter.chatModel) {
+      const requestedModel = models?.[0] || roleConfig?.modelId || config.openRouter.chatModel;
+      if (model !== requestedModel) {
         logger.warn("Using free OpenRouter fallback model", {
-          requestedModel: config.openRouter.chatModel,
+          role,
+          requestedModel,
           fallbackModel: model,
         });
       }
@@ -173,13 +268,23 @@ const getOpenRouterResponse = async ({ prompt, system, messages }) => {
   throw new Error("No free OpenRouter models are available to try.");
 };
 
-const streamGenerate = async ({ prompt, system, messages, onToken, onModelSwitch }) => {
+const streamGenerate = async ({
+  prompt,
+  system,
+  messages,
+  role,
+  models,
+  onToken,
+  onModelSwitch,
+}) => {
   requireApiKey();
   let finishReason = null;
-  const { res, model } = await getOpenRouterResponse({ prompt, system, messages });
-  if (model !== config.openRouter.chatModel) {
+  const roleConfig = role ? getModelRole(role) : null;
+  const requestedModel = models?.[0] || roleConfig?.modelId || config.openRouter.chatModel;
+  const { res, model } = await getOpenRouterResponse({ prompt, system, messages, role, models });
+  if (model !== requestedModel) {
     onModelSwitch?.({
-      from: config.openRouter.chatModel,
+      from: requestedModel,
       to: model,
     });
   }
@@ -187,9 +292,15 @@ const streamGenerate = async ({ prompt, system, messages, onToken, onModelSwitch
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const startedAt = Date.now();
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readStreamChunk({
+      reader,
+      model,
+      role,
+      startedAt,
+    });
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
@@ -218,4 +329,8 @@ const streamGenerate = async ({ prompt, system, messages, onToken, onModelSwitch
   return { finishReason, model };
 };
 
-module.exports = { streamGenerate };
+module.exports = {
+  createOpenRouterError,
+  getOpenRouterErrorMessage,
+  streamGenerate,
+};

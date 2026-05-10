@@ -358,6 +358,44 @@ const inspectGenerationAssets = async (paths = []) => {
   }));
 };
 
+async function readImagePreview(fullPath, fileName = fullPath) {
+  const extension = path.extname(fullPath).toLowerCase();
+
+  if (!IMAGE_EXTENSIONS.has(extension)) {
+    throw new Error(`Unsupported image asset type: ${extension || "none"}`);
+  }
+
+  const stats = await fs.stat(fullPath);
+  const mimeType = IMAGE_MIME_TYPES[extension] || "application/octet-stream";
+  const previewable =
+    PREVIEWABLE_IMAGE_EXTENSIONS.has(extension) && stats.size <= MAX_IMAGE_PREVIEW_BYTES;
+  let dataUrl = "";
+  let width = 0;
+  let height = 0;
+
+  if (previewable) {
+    const buffer = await fs.readFile(fullPath);
+    dataUrl = `data:${mimeType};base64,${buffer.toString("base64")}`;
+
+    const image = nativeImage.createFromBuffer(buffer);
+    if (!image.isEmpty()) {
+      const size = image.getSize();
+      width = size.width;
+      height = size.height;
+    }
+  }
+
+  return {
+    dataUrl,
+    fileName,
+    mimeType,
+    previewable,
+    size: stats.size,
+    width,
+    height,
+  };
+}
+
 const stripJsonComments = (text) =>
   text
     .replace(/^\uFEFF/, "")
@@ -764,6 +802,13 @@ ipcMain.handle("project:inspect-generation-assets", async (_event, payload) =>
   inspectGenerationAssets(Array.isArray(payload?.paths) ? payload.paths : [])
 );
 
+ipcMain.handle("project:read-generation-asset", async (_event, payload) => {
+  const sourcePath = String(payload?.sourcePath || "");
+  if (!sourcePath) throw new Error("A source asset path is required.");
+
+  return readImagePreview(path.resolve(sourcePath), path.basename(sourcePath));
+});
+
 ipcMain.handle("project:get-dropped-file-path", (_event, file) => {
   try {
     return webUtils.getPathForFile(file) || "";
@@ -834,36 +879,7 @@ ipcMain.handle("project:read-asset", async (_event, payload) => {
     throw new Error(`Unsupported Godot asset type: ${extension || "none"}`);
   }
 
-  const fullPath = resolveProjectFile(rootPath, filePath);
-  const stats = await fs.stat(fullPath);
-  const mimeType = IMAGE_MIME_TYPES[extension] || "application/octet-stream";
-  const previewable =
-    PREVIEWABLE_IMAGE_EXTENSIONS.has(extension) && stats.size <= MAX_IMAGE_PREVIEW_BYTES;
-  let dataUrl = "";
-  let width = 0;
-  let height = 0;
-
-  if (previewable) {
-    const buffer = await fs.readFile(fullPath);
-    dataUrl = `data:${mimeType};base64,${buffer.toString("base64")}`;
-
-    const image = nativeImage.createFromBuffer(buffer);
-    if (!image.isEmpty()) {
-      const size = image.getSize();
-      width = size.width;
-      height = size.height;
-    }
-  }
-
-  return {
-    dataUrl,
-    fileName: filePath,
-    mimeType,
-    previewable,
-    size: stats.size,
-    width,
-    height,
-  };
+  return readImagePreview(resolveProjectFile(rootPath, filePath), filePath);
 });
 
 ipcMain.handle("project:list-files", async (_event, payload) => {

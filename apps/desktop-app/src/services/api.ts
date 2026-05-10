@@ -1,6 +1,7 @@
 import type {
   GeneratedProjectManifest,
   GenerationAsset,
+  GenerationAttachment,
   OpenRouterModelCatalog,
   ProjectStats,
   RegisteredProject,
@@ -13,6 +14,43 @@ export type ModelSwitchEvent = {
   type: "model-switch";
   from: string;
   to: string;
+};
+
+export type GenerationProgressEvent = {
+  type: "progress";
+  stage: string;
+  message: string;
+  role?: string;
+  model?: string;
+  from?: string;
+  to?: string;
+  iteration?: number;
+  maxIterations?: number;
+  timestamp?: string;
+};
+
+export type GenerationErrorEvent = {
+  type: "error";
+  message: string;
+  stage?: string;
+  lastMessage?: string;
+  code?: string;
+};
+
+export type GodotGenerationPayload = {
+  prompt: string;
+  assets: Pick<
+    GenerationAsset,
+    "name" | "extension" | "size" | "destinationPath"
+  >[];
+  attachments?: Pick<
+    GenerationAttachment,
+    "name" | "mimeType" | "size" | "dataUrl" | "width" | "height"
+  >[];
+  mode?: "free";
+  targetGodotVersion?: string;
+  validationEnabled?: boolean;
+  repairIterations?: number;
 };
 
 type StreamHandlers =
@@ -190,6 +228,14 @@ export const generateGodotProject = async (payload: {
     GenerationAsset,
     "name" | "extension" | "size" | "destinationPath"
   >[];
+  attachments?: Pick<
+    GenerationAttachment,
+    "name" | "mimeType" | "size" | "dataUrl" | "width" | "height"
+  >[];
+  mode?: "free";
+  targetGodotVersion?: string;
+  validationEnabled?: boolean;
+  repairIterations?: number;
 }): Promise<GeneratedProjectManifest> => {
   const response = await fetch(`${API_BASE_URL}/generation/godot-project`, {
     method: "POST",
@@ -198,6 +244,75 @@ export const generateGodotProject = async (payload: {
   });
 
   return parseJsonResponse<GeneratedProjectManifest>(response);
+};
+
+export const streamGodotProjectGeneration = async (
+  payload: GodotGenerationPayload,
+  handlers: {
+    onProgress?: (event: GenerationProgressEvent) => void;
+  } = {}
+): Promise<GeneratedProjectManifest> => {
+  const response = await fetch(`${API_BASE_URL}/generation/godot-project/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok || !response.body) {
+    const text = await response.text();
+    throw new Error(text || `Request failed with ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let manifest: GeneratedProjectManifest | undefined;
+
+  const consume = (chunk: string) => {
+    buffer += chunk;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    lines.forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      const event = JSON.parse(trimmed) as
+        | GenerationProgressEvent
+        | { type: "result"; manifest: GeneratedProjectManifest }
+        | GenerationErrorEvent;
+
+      if (event.type === "progress") {
+        handlers.onProgress?.(event);
+        return;
+      }
+
+      if (event.type === "result") {
+        manifest = event.manifest;
+        return;
+      }
+
+      const stageLabel = event.lastMessage || event.stage;
+      throw new Error(
+        stageLabel
+          ? `${stageLabel}: ${event.message || "Godot project generation failed."}`
+          : event.message || "Godot project generation failed."
+      );
+    });
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    consume(decoder.decode(value, { stream: true }));
+  }
+
+  const tail = decoder.decode();
+  if (tail) consume(tail);
+  if (buffer.trim()) consume("\n");
+  if (!manifest) throw new Error("Godot project generation ended without a result.");
+
+  return manifest;
 };
 
 export const streamChat = async (

@@ -19,6 +19,9 @@ declare global {
       inspectGenerationAssets: (payload: {
         paths: string[];
       }) => Promise<GenerationAsset[]>;
+      readGenerationAsset: (payload: {
+        sourcePath: string;
+      }) => Promise<ProjectAsset>;
       getDroppedFilePath: (file: File) => Promise<string>;
       rememberProject: (payload: {
         rootPath: string;

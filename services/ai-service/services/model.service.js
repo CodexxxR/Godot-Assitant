@@ -38,7 +38,7 @@ const ensureDataDirectory = () => {
 
 const isSafeModelName = (model = "") => /^[a-zA-Z0-9._:/-]+$/.test(model);
 const isConfiguredFreeModelName = (model = "") =>
-  model.endsWith(":free") || config.openRouter.modelCatalog.includes(model);
+  model.endsWith(":free") || model === "openrouter/free";
 const getPreferredRank = (name) => {
   const index = PREFERRED_FREE_MODELS.indexOf(name);
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;

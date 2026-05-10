@@ -25,6 +25,32 @@ export type GenerationAsset = {
   destinationPath: string;
 };
 
+export type GenerationAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+  width: number;
+  height: number;
+};
+
+export type GenerationHistoryItem = {
+  id: string;
+  createdAt: string;
+  prompt: string;
+  status: "generated" | "failed";
+  message: string;
+  projectName?: string;
+  summary?: string;
+  mainScene?: string;
+  fileCount?: number;
+  assetCount: number;
+  attachmentCount: number;
+  outputPath?: string;
+  model?: string;
+};
+
 export type GeneratedProjectFile = {
   path: string;
   content: string;
@@ -37,7 +63,32 @@ export type GeneratedProjectManifest = {
   files: GeneratedProjectFile[];
   notes: string[];
   model?: string;
+  models?: Record<string, string>;
+  mode?: "free";
+  targetGodotVersion?: string;
+  success?: boolean;
   usedFallback?: boolean;
+  repairIterationsUsed?: number;
+  logs?: string[];
+  validation?: {
+    ok: boolean;
+    static_errors: Array<{
+      code?: string;
+      message: string;
+      file?: string;
+      line?: number;
+      path?: string;
+    }>;
+    cli_errors: string[];
+    warnings: string[];
+  };
+  review?: {
+    approved: boolean;
+    issues: unknown[];
+    suggested_fixes: unknown[];
+    skipped?: boolean;
+    warning?: string;
+  };
 };
 
 export type SelectedProject = {

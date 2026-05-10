@@ -7,7 +7,7 @@
     "dev": "node index.js",
     "start": "node index.js",
     "chroma": "chroma run --path ./data/chroma --host localhost --port 8000",
-    "test": "node --check index.js && find routes services utils config -maxdepth 2 -name '*.js' -print0 | xargs -0 -n1 node --check"
+    "test": "node --check index.js && find routes services utils config test -maxdepth 3 -name '*.js' -print0 | xargs -0 -n1 node --check && node --test test/*.test.js"
   },
   "keywords": [],
   "author": "",

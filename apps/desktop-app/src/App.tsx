@@ -25,13 +25,13 @@ import { WelcomeScreen } from "./components/WelcomeScreen";
 import {
   deleteIndexedFile,
   deleteProject,
-  generateGodotProject,
   getProjectStats,
   listOpenRouterModels,
   registerProject,
   selectOpenRouterModel,
   streamChat,
   streamGeneratedCode,
+  streamGodotProjectGeneration,
   streamInlineEdit,
   uploadFiles,
 } from "./services/api";
@@ -47,7 +47,10 @@ import type {
   EditorRange,
   EditorSelection,
   GeneratedProjectManifest,
+  GenerationAttachment,
   GenerationAsset,
+  GenerationHistoryItem,
+  ProjectAsset,
   ProjectFile,
   RegisteredProject,
   SelectedProject,
@@ -74,11 +77,80 @@ const IMAGE_EXTENSIONS = new Set([
   ".ktx",
   ".ktx2",
 ]);
+const GENERATION_HISTORY_KEY = "godot-assistant:generation-history";
+const MAX_PROMPT_ATTACHMENT_BYTES = 6 * 1024 * 1024;
+const MAX_PROMPT_ATTACHMENTS = 6;
+
+type GenerationPreview = {
+  title: string;
+  dataUrl: string;
+  mimeType: string;
+  size: number;
+  width: number;
+  height: number;
+};
 
 const isImageFile = (file?: ProjectFile) =>
   Boolean(file && (file.kind === "image" || IMAGE_EXTENSIONS.has(file.extension)));
 
 const isTextFile = (file?: ProjectFile) => Boolean(file && !isImageFile(file));
+
+const isPreviewableGenerationAsset = (asset: GenerationAsset) =>
+  [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".svg", ".ico"].includes(
+    asset.extension.toLowerCase()
+  );
+
+const isPromptImageFile = (file: File) =>
+  file.type.startsWith("image/") || /\.(png|jpe?g|webp|bmp|gif|svg|ico)$/i.test(file.name);
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Could not read file."));
+    reader.readAsDataURL(file);
+  });
+
+const getImageSize = (dataUrl: string) =>
+  new Promise<{ width: number; height: number }>((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => resolve({ width: 0, height: 0 });
+    image.src = dataUrl;
+  });
+
+const toGenerationPreview = (asset: ProjectAsset, title = asset.fileName): GenerationPreview => ({
+  title,
+  dataUrl: asset.dataUrl,
+  mimeType: asset.mimeType,
+  size: asset.size,
+  width: asset.width,
+  height: asset.height,
+});
+
+const loadGenerationHistory = (): GenerationHistoryItem[] => {
+  try {
+    const raw = localStorage.getItem(GENERATION_HISTORY_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, 12) : [];
+  } catch {
+    return [];
+  }
+};
+
+const progressForGenerationStage = (stage: string, iteration = 0, maxIterations = 2) => {
+  if (stage === "plan") return 16;
+  if (stage === "code") return 38;
+  if (stage === "build-scenes") return 58;
+  if (stage === "validate") return 70;
+  if (stage === "review") return 82;
+  if (stage === "repair") {
+    const repairShare = maxIterations > 0 ? iteration / maxIterations : 1;
+    return Math.min(95, 84 + repairShare * 10);
+  }
+  if (stage === "done") return 100;
+  return 48;
+};
 
 const buildImageAssetIndexText = (file: ProjectFile) =>
   [
@@ -159,11 +231,16 @@ function App() {
   const [isDeletingFile, setIsDeletingFile] = useState(false);
   const [generatorPrompt, setGeneratorPrompt] = useState("");
   const [generatorAssets, setGeneratorAssets] = useState<GenerationAsset[]>([]);
+  const [generatorAttachments, setGeneratorAttachments] = useState<GenerationAttachment[]>([]);
   const [generatorOutputFolder, setGeneratorOutputFolder] = useState("");
   const [generatorError, setGeneratorError] = useState("");
   const [generationStatus, setGenerationStatus] = useState("");
+  const [generationProgress, setGenerationProgress] = useState(0);
   const [generatedManifest, setGeneratedManifest] =
     useState<GeneratedProjectManifest>();
+  const [generationHistory, setGenerationHistory] =
+    useState<GenerationHistoryItem[]>(loadGenerationHistory);
+  const [generationPreview, setGenerationPreview] = useState<GenerationPreview | null>(null);
   const [isGeneratingProject, setIsGeneratingProject] = useState(false);
   const {
     activeFile,
@@ -225,6 +302,72 @@ function App() {
     setModelSwitchNotice({ ...event, id: makeId() });
   }, []);
 
+  const resetGeneratorDraft = useCallback(() => {
+    if (isGeneratingProject) return;
+    setGeneratorPrompt("");
+    setGeneratorAssets([]);
+    setGeneratorAttachments([]);
+    setGeneratorError("");
+    setGenerationStatus("");
+    setGenerationProgress(0);
+    setGeneratedManifest(undefined);
+    setGenerationPreview(null);
+  }, [isGeneratingProject]);
+
+  const openFreshGenerator = useCallback(() => {
+    resetGeneratorDraft();
+    setView("generator");
+  }, [resetGeneratorDraft, setView]);
+
+  const addGenerationHistoryItem = useCallback((item: GenerationHistoryItem) => {
+    setGenerationHistory((current) => [item, ...current].slice(0, 12));
+  }, []);
+
+  const addGeneratorAttachmentFiles = useCallback(
+    async (files: File[]) => {
+      const imageFiles = files.filter(isPromptImageFile);
+      if (!imageFiles.length) {
+        setGeneratorError("Add image files as prompt attachments.");
+        return;
+      }
+
+      const availableSlots = Math.max(
+        0,
+        MAX_PROMPT_ATTACHMENTS - generatorAttachments.length
+      );
+      const acceptedFiles = imageFiles
+        .filter((file) => file.size <= MAX_PROMPT_ATTACHMENT_BYTES)
+        .slice(0, availableSlots);
+
+      if (!acceptedFiles.length) {
+        setGeneratorError(
+          `Prompt attachments are limited to ${MAX_PROMPT_ATTACHMENTS} images under 6 MB each.`
+        );
+        return;
+      }
+
+      const attachments = await Promise.all(
+        acceptedFiles.map(async (file) => {
+          const dataUrl = await readFileAsDataUrl(file);
+          const size = await getImageSize(dataUrl);
+          return {
+            id: makeId(),
+            name: file.name,
+            mimeType: file.type || "image/*",
+            size: file.size,
+            dataUrl,
+            width: size.width,
+            height: size.height,
+          };
+        })
+      );
+
+      setGeneratorAttachments((current) => [...current, ...attachments]);
+      setGeneratorError("");
+    },
+    [generatorAttachments.length]
+  );
+
   const toggleWorkspacePanel = useCallback((panel: WorkspacePanel) => {
     if (panel === "chat") setIsChatFullscreen(false);
     setCollapsedPanels((current) => ({
@@ -247,6 +390,13 @@ function App() {
 
     return () => window.clearTimeout(timeout);
   }, [modelSwitchNotice]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      GENERATION_HISTORY_KEY,
+      JSON.stringify(generationHistory.slice(0, 12))
+    );
+  }, [generationHistory]);
 
   const refreshProjectStats = useCallback(
     async (projectId: string) => {
@@ -534,19 +684,69 @@ function App() {
     setGeneratorError("");
     setError("");
     setGeneratedManifest(undefined);
+    setGenerationProgress(4);
+    let lastGenerationMessage = "Designing project";
+    let manifestForHistory: GeneratedProjectManifest | undefined;
 
     try {
       setGenerationStatus("Designing project");
-      const manifest = await generateGodotProject({
-        prompt,
-        assets: generatorAssets.map((asset) => ({
-          name: asset.name,
-          extension: asset.extension,
-          size: asset.size,
-          destinationPath: asset.destinationPath,
-        })),
-      });
+      const manifest = await streamGodotProjectGeneration(
+        {
+          prompt,
+          assets: generatorAssets.map((asset) => ({
+            name: asset.name,
+            extension: asset.extension,
+            size: asset.size,
+            destinationPath: asset.destinationPath,
+          })),
+          attachments: generatorAttachments.map((attachment) => ({
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            size: attachment.size,
+            dataUrl: attachment.dataUrl,
+            width: attachment.width,
+            height: attachment.height,
+          })),
+          mode: "free",
+          targetGodotVersion: "4.6",
+          validationEnabled: true,
+          repairIterations: 2,
+        },
+        {
+          onProgress: (event) => {
+            lastGenerationMessage = event.message;
+            setGenerationStatus(event.message);
+            setGenerationProgress(
+              progressForGenerationStage(
+                event.stage,
+                event.iteration,
+                event.maxIterations
+              )
+            );
+            if (event.stage === "model-switch" && event.from && event.to) {
+              showModelSwitchNotice({
+                type: "model-switch",
+                from: event.from,
+                to: event.to,
+              });
+            }
+          },
+        }
+      );
+      manifestForHistory = manifest;
       setGeneratedManifest(manifest);
+
+      if (manifest.success === false) {
+        const validationErrors = [
+          ...(manifest.validation?.static_errors.map((issue) => issue.message) || []),
+          ...(manifest.validation?.cli_errors || []),
+        ];
+        throw new Error(
+          validationErrors.length
+            ? `Generated project did not pass validation: ${validationErrors.slice(0, 3).join("; ")}`
+            : "Generated project did not pass validation."
+        );
+      }
 
       setGenerationStatus("Writing files");
       const project = await window.assistant.writeGeneratedProject({
@@ -558,6 +758,21 @@ function App() {
 
       setGenerationStatus("Indexing project");
       await activateProject(project, true);
+      addGenerationHistoryItem({
+        id: makeId(),
+        createdAt: new Date().toISOString(),
+        prompt,
+        status: "generated",
+        message: `Generated ${manifest.projectName} with ${manifest.files.length} files.`,
+        projectName: manifest.projectName,
+        summary: manifest.summary,
+        mainScene: manifest.mainScene,
+        fileCount: manifest.files.length,
+        assetCount: generatorAssets.length,
+        attachmentCount: generatorAttachments.length,
+        outputPath: project.rootPath,
+        model: manifest.model,
+      });
       setView("workspace");
 
       if (manifest.usedFallback) {
@@ -566,11 +781,28 @@ function App() {
         );
       }
     } catch (caught) {
+      const message =
+        caught instanceof Error ? caught.message : "Could not generate Godot project.";
       setGeneratorError(
-        caught instanceof Error ? caught.message : "Could not generate Godot project."
+        message.includes(":") ? message : `${lastGenerationMessage}: ${message}`
       );
+      addGenerationHistoryItem({
+        id: makeId(),
+        createdAt: new Date().toISOString(),
+        prompt,
+        status: "failed",
+        message: message.includes(":") ? message : `${lastGenerationMessage}: ${message}`,
+        projectName: manifestForHistory?.projectName,
+        summary: manifestForHistory?.summary,
+        mainScene: manifestForHistory?.mainScene,
+        fileCount: manifestForHistory?.files.length,
+        assetCount: generatorAssets.length,
+        attachmentCount: generatorAttachments.length,
+        model: manifestForHistory?.model,
+      });
     } finally {
       setGenerationStatus("");
+      setGenerationProgress(0);
       setIsGeneratingProject(false);
     }
   };
@@ -641,6 +873,34 @@ function App() {
     await addGeneratorAssetPaths(paths);
   };
 
+  const handlePreviewGeneratorAsset = async (asset: GenerationAsset) => {
+    if (!window.assistant || !isPreviewableGenerationAsset(asset)) return;
+
+    try {
+      const preview = await window.assistant.readGenerationAsset({
+        sourcePath: asset.sourcePath,
+      });
+      if (!preview.previewable || !preview.dataUrl) {
+        setGeneratorError("This asset cannot be previewed in the app.");
+        return;
+      }
+      setGenerationPreview(toGenerationPreview(preview, asset.name));
+    } catch (caught) {
+      setGeneratorError(caught instanceof Error ? caught.message : "Could not preview asset.");
+    }
+  };
+
+  const handlePreviewGeneratorAttachment = (attachment: GenerationAttachment) => {
+    setGenerationPreview({
+      title: attachment.name,
+      dataUrl: attachment.dataUrl,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      width: attachment.width,
+      height: attachment.height,
+    });
+  };
+
   const handleRemoveGeneratorAsset = async (sourcePath: string) => {
     if (!window.assistant) return;
 
@@ -649,6 +909,12 @@ function App() {
       .filter((path) => path !== sourcePath);
     const assets = await window.assistant.inspectGenerationAssets({ paths });
     setGeneratorAssets(assets);
+  };
+
+  const handleRemoveGeneratorAttachment = (id: string) => {
+    setGeneratorAttachments((current) =>
+      current.filter((attachment) => attachment.id !== id)
+    );
   };
 
   const handleCreateFile = () => {
@@ -1068,7 +1334,7 @@ function App() {
           canContinue={Boolean(selectedProject && registeredProject)}
           isIndexing={isIndexing}
           onContinue={() => setView("workspace")}
-          onGenerateProject={() => setView("generator")}
+          onGenerateProject={openFreshGenerator}
           onOpenModels={handleOpenSystemModels}
           onOpenProject={handleSelectProject}
           projectName={registeredProject?.name}
@@ -1097,16 +1363,26 @@ function App() {
         ) : null}
         <ProjectGeneratorScreen
           assets={generatorAssets}
+          attachments={generatorAttachments}
           error={generatorError}
           generatedManifest={generatedManifest}
+          history={generationHistory}
           isGenerating={isGeneratingProject}
+          preview={generationPreview}
+          progress={generationProgress}
           onAddAssets={handleSelectGeneratorAssets}
+          onAddAttachments={addGeneratorAttachmentFiles}
           onAssetDrop={handleDropGeneratorAssets}
+          onAttachmentDrop={addGeneratorAttachmentFiles}
           onBack={() => setView(selectedProject && registeredProject ? "workspace" : "welcome")}
+          onClosePreview={() => setGenerationPreview(null)}
           onGenerate={handleGenerateProject}
           onOutputFolder={handleSelectGeneratorOutput}
           onPromptChange={setGeneratorPrompt}
           onRemoveAsset={handleRemoveGeneratorAsset}
+          onRemoveAttachment={handleRemoveGeneratorAttachment}
+          onPreviewAsset={handlePreviewGeneratorAsset}
+          onPreviewAttachment={handlePreviewGeneratorAttachment}
           outputFolder={generatorOutputFolder}
           prompt={generatorPrompt}
           status={generationStatus}
@@ -1190,7 +1466,7 @@ function App() {
           <button
             className="toolbar-button"
             disabled={isIndexing || isResponding || isGeneratingProject}
-            onClick={() => setView("generator")}
+            onClick={openFreshGenerator}
             title="Generate Godot project"
             type="button"
           >
