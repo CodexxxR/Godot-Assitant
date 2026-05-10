@@ -60,7 +60,16 @@ Supported scene node types for this phase:
 Node, Node2D, CharacterBody2D, Area2D, StaticBody2D, RigidBody2D, Sprite2D, ColorRect, Label, Camera2D, Timer, CollisionShape2D, Marker2D, CanvasLayer.
 
 Known copied assets:
-${assets.length ? assets.map((asset) => `- ${asset.name} -> res://${asset.destinationPath}`).join("\n") : "- No assets provided; use code-drawn placeholders."}
+${
+  assets.length
+    ? assets
+        .map((asset) => {
+          const dimensions = asset.width && asset.height ? `, ${asset.width}x${asset.height}px` : "";
+          return `- ${asset.name}${dimensions} -> res://${asset.destinationPath}`;
+        })
+        .join("\n")
+    : "- No assets provided; use code-drawn placeholders."
+}
 
 Prompt-only visual references:
 ${
@@ -77,6 +86,7 @@ ${
 }
 
 If visual references are attached, use them for map layout, scene composition, obstacle placement, and gameplay structure. Do not reference them as res:// assets unless they also appear in Known copied assets.
+Treat copied asset dimensions as authoritative. Establish an explicit scale policy before coding: world units, sprite scale, grid cell size, and collision extents must all agree.
 
 Constraints:
 ${constraints.map((constraint) => `- ${constraint}`).join("\n")}
@@ -112,6 +122,13 @@ Rules:
 - Use input actions from the plan.
 - If assets are referenced, only reference assets listed in the plan.
 - Keep files complete. No TODO placeholders.
+- Use Godot 4 syntax. Use "@onready var", never "onready var".
+- Establish a single coordinate contract. For grid games, keep gameplay collision/state in integer grid coordinates such as Vector2i and convert to pixels only when drawing. For action/physics games, use CharacterBody2D, Area2D, StaticBody2D, CollisionShape2D, and move_and_slide/move_and_collide instead of sprite-position guesses.
+- Every visual asset used by Sprite2D or TextureRect must have an explicit scale/region/layout decision based on the known asset dimensions in the plan.
+- Spawners must create one new node/resource instance per spawned entity and randomize/select the entity type per spawn. Never reuse one already-added node multiple times or accidentally draw the same selected asset for every variant.
+- For Tetris/tetromino projects, do not draw a full tetromino texture four times as if it were a cell sprite. Use one shape sprite, code-drawn cells, or AtlasTexture-cropped 32x32 cells from the supplied image.
+- Store the current rotated shape/state and use that same state for movement, collision, drawing, and locking.
+- If the board image has 32px cells, align every block position to the same 32px grid and scale sprites deliberately.
 - Do not output project.godot unless you need project settings not expressible elsewhere.
 
 Approved plan:
@@ -140,6 +157,10 @@ Check:
 - No missing main scene.
 - project.godot points to the correct main scene.
 - GDScript class/node usage is reasonable for Godot 4.x.
+- Sprite scaling, collision coordinates, spawn logic, and grid cell sizes are internally consistent.
+- Grid games use integer gameplay state and only convert to pixels for rendering.
+- Composite/spritesheet assets are cropped or regioned rather than repeated as full-size cells.
+- Spawners instantiate fresh entities and do not reuse the same already-added node.
 
 Plan:
 ${JSON.stringify(plan, null, 2)}

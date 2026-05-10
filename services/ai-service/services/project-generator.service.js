@@ -57,6 +57,18 @@ const sanitizeProjectName = (name = "") => {
   return cleaned || "Generated Godot Project";
 };
 
+const toTitleCase = (value = "") =>
+  String(value)
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      if (/^2d$/i.test(word)) return "2D";
+      if (/^3d$/i.test(word)) return "3D";
+      return word[0].toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+
 const slugProjectName = (prompt = "") => {
   const words = String(prompt)
     .toLowerCase()
@@ -65,12 +77,52 @@ const slugProjectName = (prompt = "") => {
     .filter(
       (word) =>
         word &&
-        !["build", "make", "create", "a", "an", "the", "game", "godot"].includes(word)
+        ![
+          "a",
+          "an",
+          "are",
+          "build",
+          "create",
+          "developer",
+          "expert",
+          "game",
+          "generate",
+          "godot",
+          "make",
+          "project",
+          "style",
+          "using",
+          "you",
+        ].includes(word)
     )
     .slice(0, 4);
 
   if (!words.length) return "Generated Godot Project";
-  return words.map((word) => word[0].toUpperCase() + word.slice(1)).join(" ");
+  return toTitleCase(words.join(" "));
+};
+
+const deriveProjectName = ({ prompt = "", manifest } = {}) => {
+  const promptText = String(prompt).toLowerCase();
+  const gameType = String(manifest?.game_type || "").trim();
+  const normalizedGameType = gameType.toLowerCase();
+
+  if (promptText.includes("tetris") || normalizedGameType.includes("tetris")) {
+    return "Tetris";
+  }
+
+  if (/\bflappy\s+bird\b/.test(promptText) || /\bflappy\s+bird\b/i.test(gameType)) {
+    return "Flappy Bird Clone";
+  }
+
+  if (/\b(outer\s+space|space|spaceship|starship)\b/.test(promptText) && /\b(shoot|shooter|bullet|enemy|fighter)\b/.test(promptText)) {
+    return "Space Fighter Shooter";
+  }
+
+  if (gameType && !/^(game|2d game|3d game)$/i.test(gameType)) {
+    return sanitizeProjectName(toTitleCase(gameType.replace(/\b(godot|game|project)\b/gi, " ")));
+  }
+
+  return sanitizeProjectName(slugProjectName(prompt));
 };
 
 const toJsonText = (raw = "") => {
@@ -143,6 +195,8 @@ const normalizeAssets = (assets = []) =>
       name: String(asset?.name || "").trim(),
       extension: String(asset?.extension || "").trim(),
       size: Number(asset?.size || 0),
+      width: Number(asset?.width || 0),
+      height: Number(asset?.height || 0),
       destinationPath: normalizePath(asset?.destinationPath || ""),
     }))
     .filter((asset) => asset.name && asset.destinationPath)
@@ -327,7 +381,7 @@ const makeScriptStub = ({ script, prompt }) => {
 # Generated safety stub. The coder role did not provide this required script.
 
 func _ready() -> void:
-\tprint("${sanitizeProjectName(slugProjectName(prompt)).replace(/"/g, "'")} ready")
+\tprint("${deriveProjectName({ prompt }).replace(/"/g, "'")} ready")
 `;
 };
 
@@ -470,6 +524,7 @@ const buildGeneratedProjectFiles = ({
   const buildWarnings = [];
   const manifestValidation = validateProjectManifest(effectiveManifest, {
     targetGodotVersion,
+    assetPaths,
   });
 
   buildErrors.push(...manifestValidation.errors);
@@ -685,7 +740,7 @@ const generateProjectManifest = async ({
     throw error;
   }
 
-  const projectName = sanitizeProjectName(slugProjectName(validPrompt));
+  let projectName = deriveProjectName({ prompt: validPrompt });
   const baseOptions = {
     mode: options.mode || "free",
     validationEnabled: options.validationEnabled !== false,
@@ -728,6 +783,7 @@ const generateProjectManifest = async ({
 
   const planValidation = validateProjectManifest(plannerResponse.json, {
     targetGodotVersion,
+    assetPaths: normalizedAssets.map((asset) => asset.destinationPath).filter(Boolean),
   });
   if (!planValidation.ok) {
     const error = new Error(
@@ -746,6 +802,7 @@ const generateProjectManifest = async ({
   }
 
   let manifest = planValidation.manifest;
+  projectName = deriveProjectName({ prompt: validPrompt, manifest });
   emitProgress(onProgress, {
     stage: "code",
     role: "coder",
@@ -920,6 +977,7 @@ const generateProjectManifest = async ({
 
 module.exports = {
   buildGeneratedProjectFiles,
+  deriveProjectName,
   generateProjectManifest,
   makeModelClient,
   normalizeAssets,

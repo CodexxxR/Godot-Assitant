@@ -73,6 +73,69 @@ const canPreviewAsset = (asset: GenerationAsset) =>
     asset.extension.toLowerCase()
   );
 
+type DroppedFileEntry = {
+  isFile: boolean;
+  isDirectory: boolean;
+  file?: (success: (file: File) => void, error?: (error: DOMException) => void) => void;
+  createReader?: () => {
+    readEntries: (
+      success: (entries: DroppedFileEntry[]) => void,
+      error?: (error: DOMException) => void
+    ) => void;
+  };
+};
+
+const getDroppedEntry = (item: DataTransferItem): DroppedFileEntry | null =>
+  ((
+    item as DataTransferItem & {
+      webkitGetAsEntry?: () => unknown;
+    }
+  ).webkitGetAsEntry?.() as DroppedFileEntry | null) || null;
+
+const readDroppedDirectoryEntries = async (
+  reader: ReturnType<NonNullable<DroppedFileEntry["createReader"]>>
+): Promise<DroppedFileEntry[]> => {
+  const entries: DroppedFileEntry[] = [];
+
+  while (true) {
+    const batch = await new Promise<DroppedFileEntry[]>((resolve, reject) => {
+      reader.readEntries(resolve, reject);
+    });
+    if (batch.length === 0) break;
+    entries.push(...batch);
+  }
+
+  return entries;
+};
+
+const collectDroppedEntryFiles = async (entry: DroppedFileEntry): Promise<File[]> => {
+  if (entry.isFile && entry.file) {
+    return [
+      await new Promise<File>((resolve, reject) => {
+        entry.file?.(resolve, reject);
+      }),
+    ];
+  }
+
+  if (!entry.isDirectory || !entry.createReader) return [];
+
+  const entries = await readDroppedDirectoryEntries(entry.createReader());
+  const nested = await Promise.all(entries.map(collectDroppedEntryFiles));
+  return nested.flat();
+};
+
+const collectDroppedFiles = async (dataTransfer: DataTransfer) => {
+  const directFiles = Array.from(dataTransfer.files || []);
+  const entries = Array.from(dataTransfer.items || [])
+    .map(getDroppedEntry)
+    .filter((entry): entry is DroppedFileEntry => Boolean(entry));
+
+  if (!entries.length) return directFiles;
+
+  const files = await Promise.all(entries.map(collectDroppedEntryFiles));
+  return [...directFiles, ...files.flat()];
+};
+
 export function ProjectGeneratorScreen({
   assets,
   attachments,
@@ -108,7 +171,8 @@ export function ProjectGeneratorScreen({
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    onAssetDrop(Array.from(event.dataTransfer.files || []));
+    const { dataTransfer } = event;
+    void collectDroppedFiles(dataTransfer).then(onAssetDrop);
   };
 
   const handleAttachmentDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -330,7 +394,7 @@ export function ProjectGeneratorScreen({
               onDrop={handleDrop}
             >
               <UploadFileRounded />
-              <span>Drop files here</span>
+              <span>Drop files or folders here</span>
             </div>
 
             <button
@@ -340,7 +404,7 @@ export function ProjectGeneratorScreen({
               type="button"
             >
               <UploadFileRounded />
-              <span>Add assets</span>
+              <span>Add files or folders</span>
             </button>
 
             <div className="asset-list">
@@ -348,7 +412,10 @@ export function ProjectGeneratorScreen({
                 <div className="asset-pill three-actions" key={asset.sourcePath}>
                   <div>
                     <strong>{asset.name}</strong>
-                    <span>{formatBytes(asset.size)}</span>
+                    <span>
+                      {asset.width && asset.height ? `${asset.width}x${asset.height} · ` : ""}
+                      {formatBytes(asset.size)}
+                    </span>
                   </div>
                   <button
                     className="snippet-copy"

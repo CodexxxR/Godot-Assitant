@@ -6,6 +6,8 @@
   "scripts": {
     "setup": "npm --prefix services/ai-service install && npm --prefix apps/desktop-app install",
     "dev": "bash scripts/dev.sh",
+    "dev:macos": "bash scripts/dev.sh",
+    "dev:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev.ps1",
     "build": "npm --prefix apps/desktop-app run build",
     "test": "npm --prefix services/ai-service test && npm --prefix apps/desktop-app run typecheck"
   }

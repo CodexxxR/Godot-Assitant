@@ -331,12 +331,25 @@ const collectGenerationAssetFiles = async (targetPath, files = []) => {
 
   const extension = path.extname(targetPath).toLowerCase();
   if (!GENERATION_ASSET_EXTENSIONS.has(extension)) return files;
+  let width = 0;
+  let height = 0;
+
+  if (IMAGE_EXTENSIONS.has(extension) && stats.size <= MAX_IMAGE_PREVIEW_BYTES) {
+    const image = nativeImage.createFromPath(path.resolve(targetPath));
+    if (!image.isEmpty()) {
+      const size = image.getSize();
+      width = size.width;
+      height = size.height;
+    }
+  }
 
   files.push({
     sourcePath: path.resolve(targetPath),
     name: path.basename(targetPath),
     extension,
     size: stats.size,
+    width,
+    height,
     destinationPath: "",
   });
 
@@ -778,11 +791,11 @@ ipcMain.handle("project:select-generation-parent", async () => {
 
 ipcMain.handle("project:select-generation-assets", async () => {
   const result = await dialog.showOpenDialog({
-    properties: ["openFile", "multiSelections"],
-    title: "Select Assets for Generated Godot Project",
+    properties: ["openFile", "openDirectory", "multiSelections"],
+    title: "Select Asset Files or Folders for Generated Godot Project",
     filters: [
       {
-        name: "Godot assets",
+        name: "Godot asset files",
         extensions: Array.from(GENERATION_ASSET_EXTENSIONS).map((extension) =>
           extension.replace(/^\./, "")
         ),

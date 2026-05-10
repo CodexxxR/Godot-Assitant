@@ -5,7 +5,7 @@ const { logger } = require("../utils/logger");
 
 const dataDirectory = path.join(__dirname, "..", "data");
 const settingsFile = path.join(dataDirectory, "openrouter-settings.json");
-const DEFAULT_FREE_MODEL = "qwen/qwen3-coder:free";
+const DEFAULT_FREE_MODEL = "openai/gpt-oss-120b:free";
 const CATALOG_LIMITATIONS = [
   "Only OpenRouter models with zero prompt and completion pricing are listed.",
   "Free routes can be rate limited, throttled, temporarily unavailable, or moved by OpenRouter/providers.",
@@ -13,13 +13,11 @@ const CATALOG_LIMITATIONS = [
   "Free models vary widely in coding quality, context handling, moderation, and tool support.",
 ];
 const PREFERRED_FREE_MODELS = [
-  "qwen/qwen3-coder:free",
-  "openrouter/free",
   "openai/gpt-oss-120b:free",
   "openai/gpt-oss-20b:free",
-  "qwen/qwen3-next-80b-a3b-instruct:free",
   "z-ai/glm-4.5-air:free",
   "minimax/minimax-m2.5:free",
+  "openrouter/free",
   "meta-llama/llama-3.3-70b-instruct:free",
   "nvidia/nemotron-3-super-120b-a12b:free",
   "poolside/laguna-m.1:free",

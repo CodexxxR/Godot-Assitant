@@ -41,7 +41,7 @@ export type GodotGenerationPayload = {
   prompt: string;
   assets: Pick<
     GenerationAsset,
-    "name" | "extension" | "size" | "destinationPath"
+    "name" | "extension" | "size" | "width" | "height" | "destinationPath"
   >[];
   attachments?: Pick<
     GenerationAttachment,
@@ -226,7 +226,7 @@ export const generateGodotProject = async (payload: {
   prompt: string;
   assets: Pick<
     GenerationAsset,
-    "name" | "extension" | "size" | "destinationPath"
+    "name" | "extension" | "size" | "width" | "height" | "destinationPath"
   >[];
   attachments?: Pick<
     GenerationAttachment,

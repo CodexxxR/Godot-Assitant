@@ -9,7 +9,9 @@ AI_SERVICE_PORT="${AI_SERVICE_PORT:-3001}"
 AI_SERVICE_URL="${VITE_AI_SERVICE_URL:-http://localhost:$AI_SERVICE_PORT}"
 CHROMA_HOST="${CHROMA_HOST:-localhost}"
 CHROMA_PORT="${CHROMA_PORT:-8000}"
+VITE_PORT="${VITE_PORT:-5173}"
 START_CHROMA="${START_CHROMA:-1}"
+DEV_KILL_PORTS="${DEV_KILL_PORTS:-1}"
 DEV_WAIT_SECONDS="${DEV_WAIT_SECONDS:-180}"
 
 PIDS=()
@@ -53,6 +55,55 @@ is_port_open() {
 
 is_url_up() {
   curl -fsS "$1" >/dev/null 2>&1
+}
+
+get_port_pids() {
+  local port="$1"
+
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
+    return 0
+  fi
+
+  if command -v fuser >/dev/null 2>&1; then
+    fuser "$port/tcp" 2>/dev/null || true
+    return 0
+  fi
+
+  return 0
+}
+
+kill_port_if_needed() {
+  local port="$1"
+  local name="$2"
+  local pids
+
+  pids="$(get_port_pids "$port" | tr '\n' ' ' | xargs || true)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+
+  warn "Killing stale $name process(es) on port $port: $pids"
+  # shellcheck disable=SC2086
+  kill $pids >/dev/null 2>&1 || true
+  sleep 1
+
+  pids="$(get_port_pids "$port" | tr '\n' ' ' | xargs || true)"
+  if [ -n "$pids" ]; then
+    warn "Force killing stale $name process(es) on port $port: $pids"
+    # shellcheck disable=SC2086
+    kill -9 $pids >/dev/null 2>&1 || true
+    sleep 1
+  fi
+}
+
+clear_stale_app_ports() {
+  if [ "$DEV_KILL_PORTS" = "0" ]; then
+    return 0
+  fi
+
+  kill_port_if_needed "$AI_SERVICE_PORT" "AI service"
+  kill_port_if_needed "$VITE_PORT" "Vite"
 }
 
 wait_for_port() {
@@ -165,6 +216,7 @@ require_command curl
 install_dependencies_if_needed "$AI_SERVICE_DIR" "AI service"
 install_dependencies_if_needed "$DESKTOP_APP_DIR" "desktop app"
 
+clear_stale_app_ports
 start_chroma
 if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   warn "OPENROUTER_API_KEY is not set. The app can index and edit files, but AI generation will fail until it is provided."

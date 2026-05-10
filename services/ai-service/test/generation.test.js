@@ -13,6 +13,7 @@ const {
 const { validateFreeRoleConfig } = require("../services/generation/model-roles");
 const {
   buildGeneratedProjectFiles,
+  deriveProjectName,
   generateProjectManifest,
   makeModelClient,
   parseJsonObject,
@@ -97,6 +98,150 @@ test("static validator catches missing script file paths", () => {
   assert(result.static_errors.some((error) => error.code === "missing_script_file"));
 });
 
+test("static validator catches Godot 3 onready syntax", () => {
+  const manifest = makeBasicManifest();
+  const projectFile = buildProjectGodot({ manifest, projectName: "Syntax" });
+  const sceneFiles = buildSceneFiles({ manifest });
+  const result = validateGeneratedProjectStatic({
+    manifest,
+    files: [
+      projectFile,
+      ...sceneFiles.files,
+      { path: "scripts/main.gd", content: "extends Node2D\nonready var board = $Board\n" },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert(result.static_errors.some((error) => error.code === "legacy_onready_syntax"));
+});
+
+test("manifest schema rejects assets that were not provided", () => {
+  const result = validateProjectManifest(
+    {
+      ...makeBasicManifest(),
+      assets: [{ source_name: "missing.png", path: "res://assets/imported/missing.png" }],
+    },
+    { targetGodotVersion: "4.6", assetPaths: ["assets/imported/player.png"] }
+  );
+
+  assert.equal(result.ok, false);
+  assert(result.errors.some((error) => error.code === "unprovided_manifest_asset"));
+});
+
+test("static validator catches image assets without scale policy", () => {
+  const manifest = makeBasicManifest();
+  const projectFile = buildProjectGodot({ manifest, projectName: "Scaling" });
+  const sceneFiles = buildSceneFiles({ manifest });
+  const result = validateGeneratedProjectStatic({
+    manifest,
+    assetPaths: ["assets/imported/player.png"],
+    files: [
+      projectFile,
+      ...sceneFiles.files,
+      {
+        path: "scripts/main.gd",
+        content: `extends Node2D
+
+func _ready() -> void:
+\tvar sprite := Sprite2D.new()
+\tsprite.texture = preload("res://assets/imported/player.png")
+\tadd_child(sprite)
+`,
+      },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert(result.static_errors.some((error) => error.code === "asset_without_scale_policy"));
+});
+
+test("static validator catches grid gameplay without integer state", () => {
+  const manifest = makeBasicManifest();
+  const projectFile = buildProjectGodot({ manifest, projectName: "Grid" });
+  const sceneFiles = buildSceneFiles({ manifest });
+  const result = validateGeneratedProjectStatic({
+    manifest,
+    files: [
+      projectFile,
+      ...sceneFiles.files,
+      {
+        path: "scripts/main.gd",
+        content: `extends Node2D
+
+const BOARD_WIDTH := 10
+const BOARD_HEIGHT := 20
+const CELL_SIZE := 32
+
+func _is_valid_position(position: Vector2) -> bool:
+\treturn position.x >= 0 and position.x < BOARD_WIDTH * CELL_SIZE
+`,
+      },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert(result.static_errors.some((error) => error.code === "grid_game_without_integer_state"));
+});
+
+test("static validator catches full composite textures repeated as grid cells", () => {
+  const manifest = makeBasicManifest();
+  const projectFile = buildProjectGodot({ manifest, projectName: "Cells" });
+  const sceneFiles = buildSceneFiles({ manifest });
+  const result = validateGeneratedProjectStatic({
+    manifest,
+    assetPaths: ["assets/imported/block.png"],
+    files: [
+      projectFile,
+      ...sceneFiles.files,
+      {
+        path: "scripts/main.gd",
+        content: `extends Node2D
+
+const CELL_SIZE := 32
+const TEXTURE := preload("res://assets/imported/block.png")
+
+func _draw_piece(shape_cells: Array) -> void:
+\tfor cell in shape_cells:
+\t\tvar sprite := Sprite2D.new()
+\t\tsprite.texture = TEXTURE
+\t\tsprite.position = Vector2(cell.x, cell.y) * CELL_SIZE
+\t\tadd_child(sprite)
+`,
+      },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert(result.static_errors.some((error) => error.code === "full_texture_repeated_as_grid_cell"));
+});
+
+test("static validator catches spawners that reuse one node instance", () => {
+  const manifest = makeBasicManifest();
+  const projectFile = buildProjectGodot({ manifest, projectName: "Spawner" });
+  const sceneFiles = buildSceneFiles({ manifest });
+  const result = validateGeneratedProjectStatic({
+    manifest,
+    files: [
+      projectFile,
+      ...sceneFiles.files,
+      {
+        path: "scripts/main.gd",
+        content: `extends Node2D
+
+func _spawn_wave() -> void:
+\tvar enemy := Node2D.new()
+\tfor index in range(4):
+\t\tenemy.position = Vector2(index * 32, 0)
+\t\tadd_child(enemy)
+`,
+      },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert(result.static_errors.some((error) => error.code === "spawn_reuses_single_node_instance"));
+});
+
 test("static validator ignores README directory references", () => {
   const manifest = makeBasicManifest();
   const projectFile = buildProjectGodot({ manifest, projectName: "Docs" });
@@ -158,8 +303,10 @@ test("OpenRouter role config loads free models only", () => {
   });
   Object.values(result.roles).forEach((role) => {
     assert(role.modelId.endsWith(":free") || role.modelId === "openrouter/free");
+    assert(!role.modelId.includes("qwen/qwen3"), `${role.modelId} should not be a default Qwen3 route`);
     role.fallbackModels.forEach((model) => {
       assert(model.endsWith(":free") || model === "openrouter/free");
+      assert(!model.includes("qwen/qwen3"), `${model} should not be a default Qwen3 fallback`);
     });
   });
 });
@@ -184,6 +331,16 @@ test("project generator parser quotes common Godot constructor values", () => {
 
   assert.equal(parsed.scenes[0].root.properties.position, "Vector2(0, 120)");
   assert.equal(parsed.scenes[0].root.properties.modulate, "Color(1, 0.5, 0.25, 1)");
+});
+
+test("project naming recognizes Tetris prompts and manifests", () => {
+  assert.equal(
+    deriveProjectName({
+      prompt: "You are an expert Godot 4.6 developer. Generate a complete Tetris-style project.",
+    }),
+    "Tetris"
+  );
+  assert.equal(deriveProjectName({ prompt: "Build blocks", manifest: { game_type: "tetris_clone" } }), "Tetris");
 });
 
 test("vision planner retries with attachment metadata when JSON is truncated", async () => {

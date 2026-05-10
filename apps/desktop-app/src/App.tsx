@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  CSSProperties,
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent,
+} from "react";
 import {
   CheckRounded,
   CodeRounded,
@@ -80,6 +85,23 @@ const IMAGE_EXTENSIONS = new Set([
 const GENERATION_HISTORY_KEY = "godot-assistant:generation-history";
 const MAX_PROMPT_ATTACHMENT_BYTES = 6 * 1024 * 1024;
 const MAX_PROMPT_ATTACHMENTS = 6;
+const CHAT_WIDTH_STORAGE_KEY = "godot-assistant:workspace-chat-width";
+const DEFAULT_CHAT_WIDTH = 390;
+const MIN_CHAT_WIDTH = 280;
+const MAX_CHAT_WIDTH = 760;
+const CHAT_RESIZER_WIDTH = 8;
+
+const clampNumber = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const getInitialChatWidth = () => {
+  if (typeof window === "undefined") return DEFAULT_CHAT_WIDTH;
+
+  const savedWidth = Number(window.localStorage.getItem(CHAT_WIDTH_STORAGE_KEY));
+  return Number.isFinite(savedWidth)
+    ? clampNumber(savedWidth, MIN_CHAT_WIDTH, MAX_CHAT_WIDTH)
+    : DEFAULT_CHAT_WIDTH;
+};
 
 type GenerationPreview = {
   title: string;
@@ -213,6 +235,7 @@ const replaceRange = (source: string, range: EditorRange, replacement: string) =
 };
 
 function App() {
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const [modelSwitchNotice, setModelSwitchNotice] = useState<
     (ModelSwitchEvent & { id: string }) | null
   >(null);
@@ -221,6 +244,8 @@ function App() {
     editor: false,
     chat: false,
   });
+  const [chatColumnWidth, setChatColumnWidth] = useState(getInitialChatWidth);
+  const [isResizingChat, setIsResizingChat] = useState(false);
   const [isChatFullscreen, setIsChatFullscreen] = useState(false);
   const [isNewFileDialogOpen, setIsNewFileDialogOpen] = useState(false);
   const [newFilePath, setNewFilePath] = useState("");
@@ -380,6 +405,89 @@ function App() {
     setCollapsedPanels((current) => ({ ...current, chat: false }));
     setIsChatFullscreen((current) => !current);
   }, []);
+
+  const getChatWidthBounds = useCallback(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) {
+      return { min: MIN_CHAT_WIDTH, max: MAX_CHAT_WIDTH };
+    }
+
+    const filesWidth = collapsedPanels.files ? 46 : 280;
+    const minEditorWidth =
+      typeof window !== "undefined" && window.matchMedia("(max-width: 1180px)").matches
+        ? 360
+        : 420;
+    const availableWidth =
+      workspace.getBoundingClientRect().width - filesWidth - minEditorWidth - CHAT_RESIZER_WIDTH;
+
+    return {
+      min: MIN_CHAT_WIDTH,
+      max: Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, availableWidth)),
+    };
+  }, [collapsedPanels.files]);
+
+  const setBoundedChatWidth = useCallback(
+    (value: number | ((current: number) => number)) => {
+      setChatColumnWidth((current) => {
+        const nextValue = typeof value === "function" ? value(current) : value;
+        const bounds = getChatWidthBounds();
+        return clampNumber(nextValue, bounds.min, bounds.max);
+      });
+    },
+    [getChatWidthBounds]
+  );
+
+  const handleChatResizePointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (isChatFullscreen || collapsedPanels.chat || collapsedPanels.editor) return;
+
+      event.preventDefault();
+      const workspace = workspaceRef.current;
+      if (!workspace) return;
+
+      const workspaceRight = workspace.getBoundingClientRect().right;
+      const previousCursor = document.body.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      setIsResizingChat(true);
+
+      const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+        const nextWidth = workspaceRight - moveEvent.clientX;
+        setBoundedChatWidth(nextWidth);
+      };
+
+      const handlePointerUp = () => {
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", handlePointerUp);
+        document.body.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+        setIsResizingChat(false);
+      };
+
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
+    },
+    [collapsedPanels.chat, collapsedPanels.editor, isChatFullscreen, setBoundedChatWidth]
+  );
+
+  const handleChatResizeKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+
+      event.preventDefault();
+      setBoundedChatWidth((current) => current + (event.key === "ArrowLeft" ? 24 : -24));
+    },
+    [setBoundedChatWidth]
+  );
+
+  useEffect(() => {
+    window.localStorage.setItem(CHAT_WIDTH_STORAGE_KEY, String(Math.round(chatColumnWidth)));
+  }, [chatColumnWidth]);
+
+  useEffect(() => {
+    setBoundedChatWidth((current) => current);
+  }, [collapsedPanels.files, setBoundedChatWidth]);
 
   useEffect(() => {
     if (!modelSwitchNotice) return;
@@ -697,6 +805,8 @@ function App() {
             name: asset.name,
             extension: asset.extension,
             size: asset.size,
+            width: asset.width,
+            height: asset.height,
             destinationPath: asset.destinationPath,
           })),
           attachments: generatorAttachments.map((attachment) => ({
@@ -870,6 +980,10 @@ function App() {
     const paths = (
       await Promise.all(files.map((file) => window.assistant!.getDroppedFilePath(file)))
     ).filter(Boolean);
+    if (!paths.length) {
+      setGeneratorError("Could not read the dropped folder. Use Add files or folders to select it.");
+      return;
+    }
     await addGeneratorAssetPaths(paths);
   };
 
@@ -1305,12 +1419,17 @@ function App() {
         : undefined;
   const sendDisabled =
     !registeredProject || !input.trim() || isResponding || isIndexing;
+  const canResizeChat =
+    !isChatFullscreen && !collapsedPanels.editor && !collapsedPanels.chat;
   const workspaceStyle = {
     "--files-column": collapsedPanels.files ? "46px" : "280px",
     "--editor-column": collapsedPanels.editor ? "46px" : "minmax(420px, 1fr)",
-    "--chat-column": collapsedPanels.chat ? "46px" : "390px",
+    "--chat-resizer-column": canResizeChat ? `${CHAT_RESIZER_WIDTH}px` : "0px",
+    "--chat-column": collapsedPanels.chat ? "46px" : `${Math.round(chatColumnWidth)}px`,
   } as CSSProperties;
-  const workspaceClassName = `workspace-grid${isChatFullscreen ? " chat-fullscreen" : ""}`;
+  const workspaceClassName = `workspace-grid${isChatFullscreen ? " chat-fullscreen" : ""}${
+    canResizeChat ? " has-chat-resizer" : ""
+  }${isResizingChat ? " is-resizing-chat" : ""}`;
 
   if (view === "welcome") {
     return (
@@ -1614,6 +1733,7 @@ function App() {
 
       <div
         className={workspaceClassName}
+        ref={workspaceRef}
         style={isChatFullscreen ? undefined : workspaceStyle}
       >
         {!isChatFullscreen ? (
@@ -1655,6 +1775,18 @@ function App() {
             onSave={handleSave}
             onSelectionChange={setSelection}
             onTogglePanel={() => toggleWorkspacePanel("editor")}
+          />
+        ) : null}
+        {canResizeChat ? (
+          <div
+            aria-label="Resize assistant panel"
+            aria-orientation="vertical"
+            className="workspace-chat-resizer"
+            onKeyDown={handleChatResizeKeyDown}
+            onPointerDown={handleChatResizePointerDown}
+            role="separator"
+            tabIndex={0}
+            title="Drag to resize assistant"
           />
         ) : null}
         <ChatPanel

@@ -1056,6 +1056,7 @@
   grid-template-columns:
     var(--files-column, 280px)
     var(--editor-column, minmax(420px, 1fr))
+    var(--chat-resizer-column, 0)
     var(--chat-column, 390px);
   min-height: 0;
   overflow: hidden;
@@ -1071,6 +1072,63 @@
   height: 100%;
   border-right: 1px solid #2b2f36;
   background: #14171b;
+}
+
+.left-panel {
+  grid-column: 1;
+}
+
+.editor-panel {
+  grid-column: 2;
+}
+
+.chat-panel {
+  grid-column: 4;
+}
+
+.chat-fullscreen .chat-panel {
+  grid-column: 1;
+}
+
+.workspace-chat-resizer {
+  position: relative;
+  z-index: 3;
+  grid-column: 3;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  border-right: 1px solid #2b2f36;
+  border-left: 1px solid transparent;
+  background: #101114;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.workspace-chat-resizer::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 46px;
+  border-radius: 999px;
+  background: #3a414b;
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.workspace-chat-resizer:hover,
+.workspace-chat-resizer:focus-visible,
+.workspace-grid.is-resizing-chat .workspace-chat-resizer {
+  border-left-color: #2f6f63;
+  border-right-color: #2f6f63;
+  outline: none;
+  background: #13201d;
+}
+
+.workspace-chat-resizer:hover::before,
+.workspace-chat-resizer:focus-visible::before,
+.workspace-grid.is-resizing-chat .workspace-chat-resizer::before {
+  background: #70d6b7;
 }
 
 .panel-rail {
@@ -1661,6 +1719,7 @@
     grid-template-columns:
       var(--files-column, 240px)
       var(--editor-column, minmax(360px, 1fr))
+      var(--chat-resizer-column, 0)
       var(--chat-column, 340px);
   }
 

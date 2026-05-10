@@ -22,6 +22,8 @@ export type GenerationAsset = {
   name: string;
   extension: string;
   size: number;
+  width: number;
+  height: number;
   destinationPath: string;
 };
 

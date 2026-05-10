@@ -10,7 +10,7 @@ const config = {
     baseUrl: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY || "",
     chatModel:
-      process.env.OPENROUTER_CHAT_MODEL || "qwen/qwen3-coder:free",
+      process.env.OPENROUTER_CHAT_MODEL || "openai/gpt-oss-120b:free",
     requestTimeoutMs: Number(process.env.OPENROUTER_TIMEOUT_MS || 120000),
     streamIdleTimeoutMs: Number(process.env.OPENROUTER_STREAM_IDLE_TIMEOUT_MS || 45000),
     streamTotalTimeoutMs: Number(process.env.OPENROUTER_STREAM_TOTAL_TIMEOUT_MS || 180000),
@@ -30,14 +30,14 @@ const config = {
         jsonRequired: true,
         fallbackModels: (
           process.env.OPENROUTER_PLANNER_FALLBACK_MODELS ||
-          "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,openai/gpt-oss-20b:free,minimax/minimax-m2.5:free,openrouter/free"
+          "z-ai/glm-4.5-air:free,openai/gpt-oss-20b:free,minimax/minimax-m2.5:free,openrouter/free"
         )
           .split(",")
           .map((model) => model.trim())
           .filter(Boolean),
       },
       coder: {
-        modelId: process.env.OPENROUTER_CODER_MODEL || "qwen/qwen3-coder:free",
+        modelId: process.env.OPENROUTER_CODER_MODEL || "openai/gpt-oss-120b:free",
         temperature: Number(process.env.OPENROUTER_CODER_TEMPERATURE || 0.16),
         maxTokens: Number(process.env.OPENROUTER_CODER_MAX_TOKENS || process.env.OPENROUTER_MAX_TOKENS || 4096),
         purpose:
@@ -45,7 +45,7 @@ const config = {
         jsonRequired: true,
         fallbackModels: (
           process.env.OPENROUTER_CODER_FALLBACK_MODELS ||
-          "qwen/qwen3-next-80b-a3b-instruct:free,openai/gpt-oss-120b:free,z-ai/glm-4.5-air:free,openai/gpt-oss-20b:free,minimax/minimax-m2.5:free,openrouter/free"
+          "z-ai/glm-4.5-air:free,openai/gpt-oss-20b:free,minimax/minimax-m2.5:free,openrouter/free"
         )
           .split(",")
           .map((model) => model.trim())
@@ -60,14 +60,14 @@ const config = {
         jsonRequired: true,
         fallbackModels: (
           process.env.OPENROUTER_REVIEWER_FALLBACK_MODELS ||
-          "openai/gpt-oss-20b:free,openai/gpt-oss-120b:free,qwen/qwen3-next-80b-a3b-instruct:free,openrouter/free"
+          "openai/gpt-oss-20b:free,openai/gpt-oss-120b:free,openrouter/free"
         )
           .split(",")
           .map((model) => model.trim())
           .filter(Boolean),
       },
       fixer: {
-        modelId: process.env.OPENROUTER_FIXER_MODEL || "qwen/qwen3-coder:free",
+        modelId: process.env.OPENROUTER_FIXER_MODEL || "openai/gpt-oss-120b:free",
         temperature: Number(process.env.OPENROUTER_FIXER_TEMPERATURE || 0.08),
         maxTokens: Number(process.env.OPENROUTER_FIXER_MAX_TOKENS || process.env.OPENROUTER_MAX_TOKENS || 4096),
         purpose:
@@ -75,7 +75,7 @@ const config = {
         jsonRequired: true,
         fallbackModels: (
           process.env.OPENROUTER_FIXER_FALLBACK_MODELS ||
-          "qwen/qwen3-next-80b-a3b-instruct:free,openai/gpt-oss-120b:free,z-ai/glm-4.5-air:free,openai/gpt-oss-20b:free,minimax/minimax-m2.5:free,openrouter/free"
+          "z-ai/glm-4.5-air:free,openai/gpt-oss-20b:free,minimax/minimax-m2.5:free,openrouter/free"
         )
           .split(",")
           .map((model) => model.trim())
@@ -118,8 +118,6 @@ const config = {
         "openrouter/free",
         "poolside/laguna-m.1:free",
         "poolside/laguna-xs.2:free",
-        "qwen/qwen3-coder:free",
-        "qwen/qwen3-next-80b-a3b-instruct:free",
         "tencent/hy3-preview:free",
         "z-ai/glm-4.5-air:free",
       ].join(",")

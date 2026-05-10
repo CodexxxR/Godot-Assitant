@@ -143,6 +143,10 @@ const validateProjectManifest = (manifest = {}, options = {}) => {
   const targetGodotVersion = options.targetGodotVersion || "4.6";
   const normalized = normalizeManifest(manifest, targetGodotVersion);
   const errors = [];
+  const hasProvidedAssetList = Array.isArray(options.assetPaths);
+  const providedAssetPaths = new Set(
+    (options.assetPaths || []).map((assetPath) => normalizeResPath(assetPath))
+  );
   const requiredFields = [
     "godot_version",
     "game_type",
@@ -233,6 +237,25 @@ const validateProjectManifest = (manifest = {}, options = {}) => {
         code: "script_extends_missing",
         message: `Script ${script.path} must declare an extends target`,
         path: `scripts[${index}].extends`,
+      });
+    }
+  });
+
+  normalized.assets.forEach((asset, index) => {
+    if (!isValidResPath(asset.path)) {
+      errors.push({
+        code: "invalid_manifest_asset_path",
+        message: `Asset path must be a valid res:// path: ${asset.path}`,
+        path: `assets[${index}].path`,
+      });
+      return;
+    }
+
+    if (hasProvidedAssetList && asset.path.startsWith("res://assets/") && !providedAssetPaths.has(asset.path)) {
+      errors.push({
+        code: "unprovided_manifest_asset",
+        message: `Manifest references asset ${asset.path}, but that asset was not provided`,
+        path: `assets[${index}].path`,
       });
     }
   });

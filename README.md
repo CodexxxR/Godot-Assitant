@@ -29,7 +29,7 @@ export OPENROUTER_API_KEY="your-key"
 Optional model selection:
 
 ```bash
-export OPENROUTER_CHAT_MODEL="qwen/qwen3-coder:free"
+export OPENROUTER_CHAT_MODEL="openai/gpt-oss-120b:free"
 export OPENROUTER_MAX_TOKENS="4096"
 export OPENROUTER_MAX_CONTINUATIONS="2"
 export OPENROUTER_FREE_FALLBACK_ATTEMPTS="6"
@@ -37,16 +37,16 @@ export OPENROUTER_STREAM_IDLE_TIMEOUT_MS="45000"
 export OPENROUTER_STREAM_TOTAL_TIMEOUT_MS="180000"
 ```
 
-Only zero-cost OpenRouter models are selectable. `OPENROUTER_CHAT_MODEL` takes precedence over the saved model only when it is a free model, usually an id ending in `:free`; paid model ids are ignored and the app falls back to `qwen/qwen3-coder:free`.
+Only zero-cost OpenRouter models are selectable. `OPENROUTER_CHAT_MODEL` takes precedence over the saved model only when it is a free model, usually an id ending in `:free`; paid model ids are ignored and the app falls back to `openai/gpt-oss-120b:free`.
 When a free route is rate-limited, the service automatically retries other free code/general models up to `OPENROUTER_FREE_FALLBACK_ATTEMPTS`.
 
 Project generation uses role-specific free OpenRouter models. Override them with free model ids only:
 
 ```bash
 export OPENROUTER_PLANNER_MODEL="openai/gpt-oss-120b:free"
-export OPENROUTER_CODER_MODEL="qwen/qwen3-coder:free"
+export OPENROUTER_CODER_MODEL="openai/gpt-oss-120b:free"
 export OPENROUTER_REVIEWER_MODEL="z-ai/glm-4.5-air:free"
-export OPENROUTER_FIXER_MODEL="qwen/qwen3-coder:free"
+export OPENROUTER_FIXER_MODEL="openai/gpt-oss-120b:free"
 export GODOT_TARGET_VERSION="4.6"
 export GODOT_GENERATION_REPAIR_ITERATIONS="2"
 ```
@@ -66,7 +66,15 @@ If `GODOT_BIN` is not configured, generation still runs static validation and re
 npm run dev
 ```
 
-The dev script installs missing dependencies, starts Chroma if needed, starts the AI service, and launches the Electron desktop app.
+On macOS/Linux, `npm run dev` and `npm run dev:macos` use `scripts/dev.sh`.
+
+On Windows PowerShell, run:
+
+```powershell
+npm run dev:windows
+```
+
+The dev scripts install missing dependencies, clear stale AI/Vite ports by default, start Chroma if needed, start the AI service, and launch the Electron desktop app. Set `DEV_KILL_PORTS=0` if you do not want the launcher to kill existing listeners on ports `3001` and `5173`.
 
 Image assets such as `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`, `.svg`, `.ico`, `.tga`, `.exr`, `.hdr`, `.dds`, `.ktx`, and `.ktx2` appear in the file tree. Browser-previewable formats open as image previews; other Godot texture formats are tracked and indexed by metadata only.
 
@@ -103,13 +111,18 @@ Validation runs before any generated folder is written:
 - Manifest Godot version starts with `4.6`.
 - `.tscn` `ExtResource` ids are defined before use.
 - Generated files do not contain obvious Godot 3.x or Godot 4.2 assumptions.
+- Manifest assets must match files the user actually provided.
+- GDScript must not use legacy `onready` syntax.
+- Grid games are checked for integer gameplay state instead of pixel-only collision logic.
+- Image assets used by gameplay scripts must have an explicit scale, region, or dimension-based layout policy.
+- Spawner code is checked for accidentally reusing one already-created node instance in a loop.
 - Optional CLI hooks can run `godot --headless --path <project_path> --quit` and a main-scene debug check when a local Godot binary is configured.
 
 If validation or review fails, the repair loop calls the `fixer` role with only the relevant errors and affected files. The default maximum is 2 repair iterations. Results include validation logs, warnings, model usage by role, and whether generation succeeded.
 
 The generator screen uses a streaming progress endpoint, so it updates as each stage starts and finishes. OpenRouter streams also have idle and total body timeouts; this prevents a free provider from leaving the app stuck after it has accepted a request but stops sending tokens.
 
-Prompt references are sent to the planner as image attachments when a free vision-capable route is available. If that route is unavailable, the generator falls back to text metadata for those images and continues with the free text planner. Project assets are separate: assets are copied into the generated Godot folder, while prompt references only guide the plan.
+Prompt references are sent to the planner as image attachments when a free vision-capable route is available. If that route is unavailable, the generator falls back to text metadata for those images and continues with the free text planner. Project assets are separate: assets are copied into the generated Godot folder, while prompt references only guide the plan. The generator accepts individual asset files or folders; folders are scanned recursively for supported Godot assets. The desktop app sends copied asset dimensions to the planner/coder so generated scaling, grid size, and collision extents can be derived from the real files.
 
 The local benchmark foundation in `services/ai-service/services/generation/evaluation.service.js` records model, role, test name, pass/fail, errors, latency, and timestamp as JSON. It is intentionally lightweight so free models can be compared later without changing the project generation pipeline.
 
